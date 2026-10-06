@@ -2,6 +2,7 @@ import { useMemo } from "react"
 import { Search } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import type { CommitActions } from "@/features/history/commit-menu"
 import { HistoryList } from "@/features/history/history-list"
 import type { History } from "@/features/history/use-history"
 import type { GitFile, RepoEntry } from "@/lib/git/types"
@@ -37,7 +38,7 @@ export type SidebarTab = TreeMode | "history"
 
 // Sidebar body: file search plus the Changes / Staged / All Files / History
 // tabs. `onNavigate` runs after a file or commit is opened (closes the mobile sheet).
-export function SidebarContent({ tab, onTabChange, files, allFiles, loading, search, onSearchChange, tree, onOpenChange, onOpenTreeFile, history, activeCommit, onOpenCommit, onNavigate }: {
+export function SidebarContent({ tab, onTabChange, files, allFiles, loading, search, onSearchChange, tree, onOpenChange, onOpenTreeFile, history, activeCommit, commitActions, onOpenCommit, onNavigate }: {
   // Controlled so "Show history" can switch to the History tab.
   tab: SidebarTab
   onTabChange: (tab: SidebarTab) => void
@@ -55,6 +56,7 @@ export function SidebarContent({ tab, onTabChange, files, allFiles, loading, sea
   history: History
   // Sha of the active commit tab, highlighted in History.
   activeCommit: string | undefined
+  commitActions: CommitActions
   onOpenCommit: (sha: string, file?: string) => void
   onNavigate: () => void
 }) {
@@ -113,6 +115,7 @@ export function SidebarContent({ tab, onTabChange, files, allFiles, loading, sea
             history={history}
             search={search}
             activeCommit={activeCommit}
+            actions={commitActions}
             onOpenCommit={(sha, file) => {
               onOpenCommit(sha, file)
               onNavigate()

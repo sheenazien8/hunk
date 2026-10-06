@@ -41,15 +41,17 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── repo.ts                 # resolveRepo() allowlist (403) + resolveInRepo() path-escape guard (400)
 │   ├── http.ts                 # HttpError, withErrors(), readJson(), requireParam(), errorMessage()
 │   ├── git/exec.ts             # git(repo, args, {okExitCodes}) via execFile; isUnbornHead, EMPTY_TREE
-│   ├── git/status.ts           # getStatus(), isUntracked()
+│   ├── git/status.ts           # getStatus() (+ upstream/ahead/behind, HEAD, operation), getOperation(), isUntracked()
 │   ├── git/diff.ts             # getDiff(repo, { file, oldPath, side })
 │   ├── git/actions.ts          # `actions: Record<ActionName, handler>` — one fn per POST action
 │   ├── git/worktree.ts         # list/add/remove worktrees, mainWorktreeOf() (reads .git file, no git)
 │   ├── git/refs.ts             # requireRef / requireSha / requireNewBranchName / refExists (request validation)
 │   ├── git/blame.ts            # getBlame(repo, file, ref?) — working tree, or as of a sha
-│   ├── git/log.ts              # getLog (paged, --follow for a file), getCommit, getCommitDiff (vs first parent)
+│   ├── git/log.ts              # getLog (paged, --follow for a file, ?ref= another branch), getCommit, getCommitDiff
 │   ├── git/branches.ts         # listBranches, switch/create/deleteBranch actions
 │   ├── git/stash.ts            # listStashes, stash/stashPop/stashApply/stashDrop actions
+│   ├── git/remote.ts           # fetch / pull (ff-only | rebase, autostash) / push (--force-with-lease)
+│   ├── git/commit-tools.ts     # amend, undoCommit, revert, cherryPick, continue/abortOperation
 │   ├── fs/files.ts             # read/write/create/remove repo files (all path-guarded)
 │   ├── fs/walk.ts              # All Files walker + ignore-pattern matching
 │   └── acp/                    # agent chat: config.ts (acp.config.json), agent-process.ts (spawn +
@@ -88,9 +90,11 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── worktrees/              # worktrees.ts (pure: default path, labels), use-worktrees.ts,
 │   │                           #   worktree-dialogs.tsx (add/remove)
 │   ├── history/                # use-history.ts (paged log for the History tab), history-list.tsx,
-│   │                           #   commit-detail.tsx + use-commit-diffs.ts (commit tab: lazy per-file diffs)
+│   │                           #   commit-detail.tsx + use-commit-diffs.ts (commit tab: lazy per-file diffs),
+│   │                           #   commit-menu.tsx (undo/revert/cherry-pick menu + CommitActions contract)
 │   ├── branches/               # use-branches.ts, branch-picker.tsx (header popover), branch-dialogs.tsx
 │   ├── stash/                  # use-stash.ts, stash-menu.tsx (header popover)
+│   ├── sync/                   # sync-menu.tsx (header ↑↓ + fetch/pull/push popover), sync-dialogs.tsx
 │   ├── theme/theme.ts          # useTheme() over the .dark class
 │   └── agent/                  # use-agent.ts (session + EventSource), agent-frame.tsx (aside/sheet +
 │                               #   useAgentPanel, drag width), agent-panel.tsx, prompt-box.tsx
@@ -158,6 +162,13 @@ Vitest (`vitest.config.mts`, node env). Unit tests sit next to the code (`*.test
     *   Shas from requests must be hex (`requireSha`) — no ref expressions. Branch names go through `requireRef` (no leading "-") and `check-ref-format` for new ones.
     *   **switchBranch** refuses (409) with tracked changes unless `stash: true`; the UI asks first ("Stash & Switch"). Remote branches ("origin/x") switch via `switch --track`, or to the existing local branch of the same name.
     *   **Conflicts**: porcelain unmerged codes (UU/AA/DU/…) → one `status: "conflicted"`, unstaged entry. Their diff is a combined diff, so `fetchEntry` also loads raw content and the viewer shows the conflict view (current | incoming panes, base in diff3 style). Resolutions live in `editContent`/`dirty` (like edit mode) until Save; "Mark resolved" = `add`.
+*   **Remote sync & commit tools** — plan `docs/plan/26-git-remote-sync-and-commit-tools.md`:
+    *   Network git (fetch/pull/push) goes through `remoteGit()` (`server/git/exec.ts`): `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=force` + `SSH_ASKPASS=false` (ssh prompts fail instead of waiting on a terminal; agent and credential helpers still work) and a 60s timeout → 504. Never call plain `git()` for anything that talks to a remote.
+    *   Status comes from `git status --porcelain --branch` (v1 + the `## a...b [ahead n, behind m]` header, `parseBranchHeader`), plus `head`/`headSubject` and `operation` (merge/rebase/cherry-pick/revert, from `--git-path` state files). ahead/behind are as of the last fetch.
+    *   `pull` is always explicit (`--no-rebase --ff-only` or `--rebase`) so `pull.rebase` config can't change it; tracked changes → 409 unless `stash` (`--autostash`; the UI asks "Stash & Pull"). A rejected push errors with the `PUSH_REJECTED` prefix → the client offers force push, which is only ever `--force-with-lease`.
+    *   Revert/cherry-pick of a merge use `-m 1`. A pick that would be empty is aborted and reported (409). Conflicts leave the operation in progress: the header banner offers Continue (`GIT_EDITOR=true`, refuses while unmerged paths remain) / Abort. Those "failed" actions are in `PARTIAL_ACTIONS` (`hunk-app.tsx`), which refreshes status/history on failure too.
+    *   `undoCommit` = `reset --soft HEAD~1`, guarded by the sha the UI saw (409 if HEAD moved); refused on the root commit. Amend with an empty message keeps HEAD's (`--no-edit`). Both confirm first when HEAD is already on the upstream.
+    *   Cherry-pick sources: a branch's history (branch picker → History icon sets `history.ref`); the commit tab offers it unless the commit is HEAD or in the current branch's loaded history.
 *   **Quick Open** (`features/quick-open/`, plan `docs/plan/25-quick-open-file-picker.md`): Ctrl/Cmd+P (also the header search button) fuzzy-finds over `repoFiles` (All Files minus git-ignored) ∪ changed files; empty query = open tabs then changed files. It's separate from the sidebar search input, which stays a tree/History filter. While it's open the global shortcut handler ignores keys. `path:42` opens the file raw (All Files tab) with `BufferEntry.gotoLine`, which `NumberedCode` scrolls to/highlights (CodeView only).
 *   **Dark mode**: persisted in `localStorage` under key `hunk-dark`. The `.dark` class is applied **pre-hydration** by an inline script in `layout.tsx` (localStorage → falls back to `prefers-color-scheme`), so there is no theme flash. `useTheme()` (`features/theme/theme.ts`) reads it via `useSyncExternalStore` and writes `localStorage` + toggles the class. Keep the key in sync with `layout.tsx`.
 *   **React compiler lint** (`react-hooks/refs`): don't return a ref inside an object you then read during render — destructure it (see `useFullscreen` in `viewer-panel.tsx`).

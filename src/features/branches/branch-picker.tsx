@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowDown, ArrowUp, Check, ChevronDown, Cloud, FolderGit2, GitBranch, GitBranchPlus, Search, Trash2 } from "lucide-react"
+import { ArrowDown, ArrowUp, Check, ChevronDown, Cloud, FolderGit2, GitBranch, GitBranchPlus, History, Search, Trash2 } from "lucide-react"
 import { usePopover } from "@/hooks/use-popover"
 import type { Branch } from "@/lib/git/types"
 import { cn } from "@/lib/utils"
@@ -15,11 +15,12 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
 
 const rowCls = "group flex w-full min-w-0 items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent focus:bg-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 
-function BranchRow({ branch, otherWorktree, onSwitch, onDelete }: {
+function BranchRow({ branch, otherWorktree, onSwitch, onHistory, onDelete }: {
   branch: Branch
   // Checked out in another worktree: git won't switch to it here.
   otherWorktree: boolean
   onSwitch: () => void
+  onHistory: () => void
   onDelete?: () => void
 }) {
   const tip = [
@@ -47,6 +48,15 @@ function BranchRow({ branch, otherWorktree, onSwitch, onDelete }: {
         {branch.ahead > 0 && <span className="flex shrink-0 items-center text-[10px] text-muted-foreground"><ArrowUp size={10} />{branch.ahead}</span>}
         {branch.behind > 0 && <span className="flex shrink-0 items-center text-[10px] text-muted-foreground"><ArrowDown size={10} />{branch.behind}</span>}
       </button>
+      <button
+        type="button"
+        title={`Show the history of ${branch.name}`}
+        aria-label={`History of ${branch.name}`}
+        onClick={onHistory}
+        className="ml-0.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        <History size={12} />
+      </button>
       {onDelete && (
         <button
           type="button"
@@ -63,8 +73,9 @@ function BranchRow({ branch, otherWorktree, onSwitch, onDelete }: {
 }
 
 // The current-branch badge in the header, opening a branch list: switch to a
-// local or remote branch, create one from the filter text, delete local ones.
-export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwitch, onCreate, onDelete }: {
+// local or remote branch, create one from the filter text, delete local ones,
+// or show a branch's history.
+export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwitch, onCreate, onDelete, onHistory }: {
   // Current branch; "" when HEAD is detached.
   current: string
   branches: Branch[]
@@ -74,6 +85,7 @@ export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwit
   onSwitch: (branch: string) => void
   onCreate: (branch: string) => void
   onDelete: (branch: string) => void
+  onHistory: (branch: string) => void
 }) {
   const { open, setOpen, rootRef, triggerRef } = usePopover()
   const [filter, setFilter] = useState("")
@@ -145,6 +157,7 @@ export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwit
                     branch={b}
                     otherWorktree={inOtherWorktree(b)}
                     onSwitch={() => !busy && run(() => onSwitch(b.name))}
+                    onHistory={() => run(() => onHistory(b.name))}
                     onDelete={b.current || b.worktree ? undefined : () => run(() => onDelete(b.name))}
                   />
                 ))}
@@ -153,7 +166,13 @@ export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwit
             {remote.length > 0 && (
               <Group label="Remote">
                 {remote.map(b => (
-                  <BranchRow key={b.name} branch={b} otherWorktree={false} onSwitch={() => !busy && run(() => onSwitch(b.name))} />
+                  <BranchRow
+                    key={b.name}
+                    branch={b}
+                    otherWorktree={false}
+                    onSwitch={() => !busy && run(() => onSwitch(b.name))}
+                    onHistory={() => run(() => onHistory(b.name))}
+                  />
                 ))}
               </Group>
             )}

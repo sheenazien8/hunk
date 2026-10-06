@@ -4,7 +4,9 @@ import { createRepoFile, removeFiles } from "../fs/files"
 import { HttpError } from "../http"
 import { resolveInRepo } from "../repo"
 import { createBranch, deleteBranch, switchBranch } from "./branches"
+import { abortOperation, amend, cherryPick, continueOperation, revert, undoCommit } from "./commit-tools"
 import { git, isUnbornHead, output } from "./exec"
+import { fetch, pull, push } from "./remote"
 import { stash, stashApply, stashDrop, stashPop } from "./stash"
 import { isUntracked } from "./status"
 import { addWorktree, removeWorktree } from "./worktree"
@@ -75,16 +77,6 @@ export const actions: Record<ActionName, ActionHandler> = {
     return output(await git(repo, ["commit", "-m", msg])) || "Committed"
   },
 
-  async push(repo) {
-    try {
-      return output(await git(repo, ["push"])) || "Pushed"
-    } catch (e) {
-      const stderr = (e as { stderr?: string }).stderr || ""
-      if (!/no upstream|set-upstream/i.test(stderr)) throw e
-      return output(await git(repo, ["push", "-u", "origin", "HEAD"])) || "Pushed (upstream set)"
-    }
-  },
-
   async create(repo, payload) {
     const filePath = (payload.path || "").trim()
     if (!filePath) throw new HttpError(400, "File path is required")
@@ -129,4 +121,13 @@ export const actions: Record<ActionName, ActionHandler> = {
   stashPop,
   stashApply,
   stashDrop,
+  fetch,
+  pull,
+  push,
+  amend,
+  undoCommit,
+  revert,
+  cherryPick,
+  continueOperation,
+  abortOperation,
 }

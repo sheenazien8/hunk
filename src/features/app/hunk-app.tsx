@@ -17,6 +17,7 @@ import { isDiscardAction, useGitActions } from "@/features/changes/use-git-actio
 import { useGitStatus } from "@/features/changes/use-git-status"
 import { focusFindInput } from "@/features/find/highlight-segments"
 import { useFind } from "@/features/find/use-find"
+import type { CommitActionKind, CommitActions } from "@/features/history/commit-menu"
 import { useHistory } from "@/features/history/use-history"
 import { QuickOpen } from "@/features/quick-open/quick-open"
 import { useQuickOpen } from "@/features/quick-open/use-quick-open"
@@ -26,6 +27,8 @@ import { SidebarFrame } from "@/features/sidebar/sidebar-frame"
 import { useExpandedDirs, useSidebar } from "@/features/sidebar/use-sidebar"
 import { StashMenu } from "@/features/stash/stash-menu"
 import { useStash } from "@/features/stash/use-stash"
+import { ForcePushDialog, PullStashDialog } from "@/features/sync/sync-dialogs"
+import { SyncMenu } from "@/features/sync/sync-menu"
 import { useTheme } from "@/features/theme/theme"
 import { ViewerPanel, type ViewerHandlers } from "@/features/viewer/viewer-panel"
 import { useWorktrees } from "@/features/worktrees/use-worktrees"
@@ -33,16 +36,21 @@ import { AddWorktreeDialog, type NewWorktree, RemoveWorktreeDialog } from "@/fea
 import { samePath } from "@/features/worktrees/worktrees"
 import { mentionableFiles } from "@/lib/acp/mentions"
 import { countConflicts, parseConflicts, resolveConflict } from "@/lib/git/parse-conflict"
-import type { ActionName, ActionPayload, Worktree } from "@/lib/git/types"
+import { type ActionName, type ActionPayload, type Commit, PUSH_REJECTED, type Worktree } from "@/lib/git/types"
 import { AppHeader } from "./app-header"
 import { useKeyboardShortcuts } from "./use-keyboard-shortcuts"
 
+// Actions that move HEAD (and usually change files with it).
+const COMMIT_ACTIONS: ActionName[] = ["pull", "amend", "undoCommit", "revert", "cherryPick", "continueOperation", "abortOperation"]
 // Actions that rewrite the working tree: open tabs show stale content after them.
-const TREE_ACTIONS = new Set<ActionName>(["switchBranch", "createBranch", "stash", "stashPop", "stashApply"])
+const TREE_ACTIONS = new Set<ActionName>(["switchBranch", "createBranch", "stash", "stashPop", "stashApply", ...COMMIT_ACTIONS])
 // Actions after which the branch list / stash list / history may differ.
-const BRANCH_ACTIONS = new Set<ActionName>(["commit", "push", "switchBranch", "createBranch", "deleteBranch", "addWorktree", "removeWorktree"])
-const STASH_ACTIONS = new Set<ActionName>(["switchBranch", "stash", "stashPop", "stashApply", "stashDrop"])
-const HISTORY_ACTIONS = new Set<ActionName>(["commit", "switchBranch", "createBranch"])
+const BRANCH_ACTIONS = new Set<ActionName>(["commit", "push", "fetch", "switchBranch", "createBranch", "deleteBranch", "addWorktree", "removeWorktree", ...COMMIT_ACTIONS])
+const STASH_ACTIONS = new Set<ActionName>(["switchBranch", "stash", "stashPop", "stashApply", "stashDrop", "pull"])
+const HISTORY_ACTIONS = new Set<ActionName>(["commit", "fetch", "switchBranch", "createBranch", ...COMMIT_ACTIONS])
+// Actions that can fail half-way and leave the repo changed (stopped on
+// conflicts): the UI must catch up even though they "failed".
+const PARTIAL_ACTIONS = new Set<ActionName>(["pull", "revert", "cherryPick", "continueOperation", "abortOperation"])
 
 export function HunkApp() {
   const { isDark, toggleTheme } = useTheme()
@@ -71,6 +79,13 @@ export function HunkApp() {
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("changes")
   const switchBranchDialog = useDialog<string>()
   const deleteBranchDialog = useDialog<string>()
+  const pullDialog = useDialog<{ rebase: boolean }>()
+  const [forcePushOpen, setForcePushOpen] = useState(false)
+  const repoState = status.state
+  const currentBranch = status.branch || branches.current
+  // HEAD is already on the upstream: amending or undoing it rewrites
+  // published history.
+  const headPushed = !!repoState.head && !!repoState.upstream && !repoState.gone && repoState.ahead === 0
 
   // The active tab is an unmerged file: the viewer shows conflict resolution.
   const conflicted = !!active && !active.commit && !active.fromAll && !active.staged
@@ -117,16 +132,27 @@ export function HunkApp() {
     buffer.open(commitTabKey(sha, file))
   }, [buffer])
 
-  // Scopes the History tab to one file and brings it into view.
-  const showHistory = useCallback((file: string) => {
-    history.showFile(file)
+  const revealHistory = useCallback(() => {
     setSidebarTab("history")
     if (window.matchMedia("(min-width: 768px)").matches) {
       if (!sidebar.open) sidebar.toggle()
     } else {
       sidebar.setMobileOpen(true)
     }
-  }, [history, sidebar])
+  }, [sidebar])
+
+  // Scopes the History tab to one file and brings it into view.
+  const showHistory = useCallback((file: string) => {
+    history.showFile(file)
+    revealHistory()
+  }, [history, revealHistory])
+
+  // Lists another branch's commits (to cherry-pick from) in the History tab.
+  const showBranchHistory = (branch: string) => {
+    history.showFile(null)
+    history.showRef(branch === currentBranch ? null : branch)
+    revealHistory()
+  }
 
   // --- Git actions ----------------------------------------------------------
 
@@ -167,7 +193,20 @@ export function HunkApp() {
     }
   }, [status, active, buffer, openFromTree, worktrees, branches, stash, history])
 
-  const { busyAction, actionResult, setActionResult, runAction } = useGitActions(repoPath, afterAction)
+  // A failed action may still have changed the repo (conflicts); a rejected
+  // push offers to force it.
+  const afterFailure = useCallback((action: ActionName, payload: ActionPayload | undefined, message: string) => {
+    if (PARTIAL_ACTIONS.has(action)) {
+      void branches.load()
+      history.reload()
+      void status.loadStatus().then(() => {
+        if (active && !active.commit && !active.dirty && !active.editMode) void buffer.fetchEntry(active)
+      })
+    }
+    if (action === "push" && !payload?.force && message.startsWith(PUSH_REJECTED)) setForcePushOpen(true)
+  }, [branches, history, status, active, buffer])
+
+  const { busyAction, actionResult, setActionResult, runAction } = useGitActions(repoPath, afterAction, afterFailure)
 
   // --- Agent -----------------------------------------------------------------
 
@@ -229,6 +268,65 @@ export function HunkApp() {
     await runAction("deleteBranch", { branch, force })
   }
 
+  // --- Sync & commit tools ---------------------------------------------------
+
+  const requestPull = (rebase: boolean) => {
+    setForcePushOpen(false)
+    if (buffer.entries.some(b => b.dirty) && !window.confirm("Open tabs have unsaved changes. Pull anyway?")) return
+    // git refuses to pull over tracked changes — offer to stash them.
+    if (status.files.some(f => f.status !== "untracked")) pullDialog.show({ rebase })
+    else void runAction("pull", { rebase })
+  }
+
+  const confirmPull = async () => {
+    const request = pullDialog.value
+    if (!request) return
+    pullDialog.setOpen(false)
+    await runAction("pull", { rebase: request.rebase, stash: true })
+  }
+
+  const forcePush = async () => {
+    setForcePushOpen(false)
+    await runAction("push", { force: true })
+  }
+
+  const amend = async (message: string) => {
+    if (headPushed && !window.confirm(
+      `"${repoState.headSubject}" is already pushed to ${repoState.upstream}. Amending rewrites it, so you'd have to force push. Amend anyway?`
+    )) return false
+    return runAction("amend", { message })
+  }
+
+  const runCommitAction = (kind: CommitActionKind, commit: Commit) => {
+    const label = `${commit.shortSha} "${commit.subject}"`
+    if (kind === "undoCommit") {
+      const pushed = headPushed ? `\n\nIt's already pushed to ${repoState.upstream} — undoing it rewrites published history.` : ""
+      if (!window.confirm(`Undo the last commit, ${label}? Its changes stay staged.${pushed}`)) return
+      void runAction("undoCommit", { sha: commit.sha })
+    } else if (kind === "revert") {
+      if (!window.confirm(`Revert ${label}? This adds a new commit that undoes its changes.`)) return
+      void runAction("revert", { sha: commit.sha })
+    } else {
+      if (!window.confirm(`Cherry-pick ${label} onto ${currentBranch}?`)) return
+      void runAction("cherryPick", { sha: commit.sha })
+    }
+  }
+
+  const commitActions: CommitActions = {
+    head: repoState.head,
+    branch: currentBranch,
+    busy: !!busyAction,
+    run: runCommitAction,
+    isOnBranch: sha => sha === repoState.head || (!history.ref && history.commits.some(c => c.sha === sha)),
+  }
+
+  const abortOperation = () => {
+    const op = repoState.operation
+    if (!op) return
+    if (!window.confirm(`Abort the ${op}? Your branch and files go back to how they were before it started — conflict resolutions are lost.`)) return
+    void runAction("abortOperation")
+  }
+
   const confirmDelete = async () => {
     const file = deleteDialog.value
     if (!file) return
@@ -258,6 +356,8 @@ export function HunkApp() {
     if (buffer.entries.some(b => b.dirty) && !window.confirm("Discard unsaved changes in open tabs?")) return false
     setProjectDir(project)
     setRepoPath(next)
+    // Branch names belong to the old repo.
+    history.showRef(null)
     status.clear()
     dirs.reset()
     buffer.restore(next)
@@ -357,6 +457,7 @@ export function HunkApp() {
       onTabChange={setSidebarTab}
       history={history}
       activeCommit={active?.commit}
+      commitActions={commitActions}
       onOpenCommit={openCommit}
       files={status.files}
       allFiles={status.allFiles}
@@ -394,6 +495,15 @@ export function HunkApp() {
                 onSwitch={requestSwitchBranch}
                 onCreate={branch => void runAction("createBranch", { branch, checkout: true })}
                 onDelete={deleteBranchDialog.show}
+                onHistory={showBranchHistory}
+              />
+              <SyncMenu
+                branch={currentBranch}
+                state={repoState}
+                busyAction={busyAction}
+                onFetch={() => void runAction("fetch")}
+                onPull={requestPull}
+                onPush={() => void runAction("push")}
               />
               <StashMenu
                 stashes={stash.stashes}
@@ -431,7 +541,12 @@ export function HunkApp() {
           onRemoveWorktree={removeWorktreeDialog.show}
           onRefresh={() => void status.loadStatus()}
           onCommit={message => runAction("commit", { message })}
+          headSubject={repoState.headSubject}
+          onAmend={amend}
           onPush={() => void runAction("push")}
+          operation={repoState.operation}
+          onContinueOperation={() => void runAction("continueOperation")}
+          onAbortOperation={abortOperation}
         />
 
         <div className="flex min-h-0 flex-1">
@@ -453,6 +568,7 @@ export function HunkApp() {
               busyAction={busyAction}
               isSaving={editing.isSaving}
               canEdit={!!active && !active.commit && editing.canEdit(active.file)}
+              commitActions={commitActions}
               find={find}
               on={viewerHandlers}
             />
@@ -525,6 +641,22 @@ export function HunkApp() {
           branch={deleteBranchDialog.value}
           busy={busyAction === "deleteBranch"}
           onConfirm={confirmDeleteBranch}
+        />
+        <PullStashDialog
+          open={pullDialog.open}
+          onOpenChange={pullDialog.setOpen}
+          rebase={pullDialog.value?.rebase ?? false}
+          busy={busyAction === "pull"}
+          onConfirm={confirmPull}
+        />
+        <ForcePushDialog
+          open={forcePushOpen}
+          onOpenChange={setForcePushOpen}
+          branch={currentBranch}
+          upstream={repoState.upstream}
+          busy={busyAction === "push"}
+          onPullRebase={() => requestPull(true)}
+          onForcePush={forcePush}
         />
         <RemoveWorktreeDialog
           open={removeWorktreeDialog.open}

@@ -1,11 +1,18 @@
 import { useCallback, useState } from "react"
 import { api } from "@/lib/api-client"
-import type { GitFile, RepoEntry } from "@/lib/git/types"
+import type { GitFile, RepoEntry, StatusResponse } from "@/lib/git/types"
 
-// Git status (changed files + branch) and the All Files listing for a repo.
+// Everything in a status response besides the files and branch name.
+export type RepoState = Omit<StatusResponse, "files" | "branch">
+
+const NO_STATE: RepoState = { ahead: 0, behind: 0 }
+
+// Git status (changed files, branch, HEAD, upstream, operation in progress)
+// and the All Files listing for a repo.
 export function useGitStatus(repoPath: string) {
   const [files, setFiles] = useState<GitFile[]>([])
   const [branch, setBranch] = useState("")
+  const [state, setState] = useState<RepoState>(NO_STATE)
   const [allFiles, setAllFiles] = useState<RepoEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -24,11 +31,12 @@ export function useGitStatus(repoPath: string) {
     setLoading(true)
     setError("")
     try {
-      const data = await api.status(target)
-      setFiles(data.files || [])
-      setBranch(data.branch || "")
+      const { files: fresh, branch: name, ...rest } = await api.status(target)
+      setFiles(fresh || [])
+      setBranch(name || "")
+      setState(rest)
       await loadAllFiles(target)
-      return data.files || []
+      return fresh || []
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load git status")
       return null
@@ -41,7 +49,8 @@ export function useGitStatus(repoPath: string) {
   const clear = useCallback(() => {
     setFiles([])
     setAllFiles([])
+    setState(NO_STATE)
   }, [])
 
-  return { files, branch, allFiles, loading, error, loadStatus, loadAllFiles, clear }
+  return { files, branch, state, allFiles, loading, error, loadStatus, loadAllFiles, clear }
 }

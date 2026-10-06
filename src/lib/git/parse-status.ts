@@ -1,3 +1,4 @@
+import { parseTrack } from "./parse-branches"
 import type { FileStatus, GitFile } from "./types"
 
 // Status of a change that only exists in the index (staged)
@@ -19,11 +20,35 @@ function worktreeStatus(c: string): FileStatus {
 // XY codes of unmerged paths (both sides changed, or one side deleted).
 const UNMERGED = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"])
 
-// Parses `git status --porcelain` (v1) output.
+export interface BranchHeader {
+  upstream?: string
+  ahead: number
+  behind: number
+  gone?: boolean
+}
+
+// The "## …" line `git status --porcelain --branch` starts with:
+//   ## main                               no upstream
+//   ## main...origin/main [ahead 1, behind 2]
+//   ## main...origin/main [gone]          upstream deleted on the remote
+//   ## No commits yet on main             unborn ("Initial commit on" in old git)
+//   ## HEAD (no branch)                   detached
+// Branch names can't contain "..", so "..." always separates the upstream.
+export function parseBranchHeader(output: string): BranchHeader {
+  const line = output.split("\n").find(l => l.startsWith("## ")) ?? ""
+  const m = /^## (?:.*?)\.\.\.(\S+)(?: \[(.*)\])?$/.exec(line)
+  if (!m) return { ahead: 0, behind: 0 }
+  const track = m[2] ?? ""
+  return { upstream: m[1], ...parseTrack(track), ...(track === "gone" ? { gone: true } : {}) }
+}
+
+// Parses `git status --porcelain` (v1) output, with or without the --branch
+// header line.
 export function parseStatus(output: string): GitFile[] {
   const files: GitFile[] = []
 
   for (const line of output.split("\n").filter(Boolean)) {
+    if (line.startsWith("## ")) continue
     const index = line[0]
     const worktree = line[1]
     const path = line.slice(3)

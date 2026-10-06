@@ -15,7 +15,7 @@ export async function listBranches(repo: string): Promise<BranchesResponse> {
 
 // Staged or unstaged changes to tracked files — what `git switch` might carry
 // over or refuse on. Untracked files are left alone.
-async function hasTrackedChanges(repo: string): Promise<boolean> {
+export async function hasTrackedChanges(repo: string): Promise<boolean> {
   return (await git(repo, ["status", "--porcelain", "--untracked-files=no"])).stdout.trim() !== ""
 }
 

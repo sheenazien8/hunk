@@ -70,8 +70,8 @@ export const api = {
     return request<BlameResponse>(`/api/git/blame?${query({ repo, file, ref })}`)
   },
 
-  log(repo: string, { file, limit, skip }: { file?: string; limit: number; skip: number }) {
-    return request<LogResponse>(`/api/git/log?${query({ repo, file, limit: String(limit), skip: String(skip) })}`)
+  log(repo: string, { file, ref, limit, skip }: { file?: string; ref?: string; limit: number; skip: number }) {
+    return request<LogResponse>(`/api/git/log?${query({ repo, file, ref, limit: String(limit), skip: String(skip) })}`)
   },
 
   commit(repo: string, sha: string) {

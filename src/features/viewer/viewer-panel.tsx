@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import {
   AlignJustify,
   Check,
+  Cherry,
   Eye,
   FileCode,
   FilePen,
@@ -17,6 +18,7 @@ import {
   Search,
   Split,
   Trash2,
+  Undo,
   Undo2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -27,6 +29,7 @@ import type { BufferEntry, ViewMode } from "@/features/buffer/buffer"
 import { basename, isMarkdownFile } from "@/features/files/file-types"
 import { FindBar } from "@/features/find/find-bar"
 import type { Find } from "@/features/find/use-find"
+import { type CommitActions, commitActionsFor } from "@/features/history/commit-menu"
 import type { ConflictChoice } from "@/lib/git/parse-conflict"
 import type { ActionName } from "@/lib/git/types"
 import { FileViewer } from "./file-viewer"
@@ -63,7 +66,7 @@ function IconTip({ tip, children }: { tip: string; children: ReactNode }) {
 }
 
 // The main card: file title + toolbar, find bar, and the file view.
-export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction, isSaving, canEdit, find, on }: {
+export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction, isSaving, canEdit, commitActions, find, on }: {
   active: BufferEntry | null
   repoPath: string
   fullPath: string
@@ -72,6 +75,7 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
   busyAction: ActionName | null
   isSaving: boolean
   canEdit: boolean
+  commitActions: CommitActions
   find: Find
   on: ViewerHandlers
 }) {
@@ -82,6 +86,10 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
   const resolving = conflicted && !editing
   // Toolbar for a working-tree file (not a commit tab).
   const fileTools = !!active && !commit
+  const commitData = commit ? active?.commitData?.commit : undefined
+  // Cherry-pick is offered unless the commit is known to be on this branch;
+  // the server says so when it would change nothing anyway.
+  const can = commitData ? commitActionsFor(commitData, commitActions, commitActions.isOnBranch(commitData.sha)) : null
 
   let title = active ? basename(active.file) : "Select a file"
   if (commit) title = `Commit ${commit.slice(0, 7)}`
@@ -94,6 +102,50 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
           <CardTitle className="truncate text-sm">{title}</CardTitle>
           {active && (
             <div className="flex items-center gap-1">
+              {commitData && can && (
+                <>
+                  {can.undo && (
+                    <IconTip tip="Undo this commit (its changes stay staged)">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1"
+                        disabled={commitActions.busy}
+                        onClick={() => commitActions.run("undoCommit", commitData)}
+                      >
+                        {busyAction === "undoCommit" ? <RefreshCw size={13} className="animate-spin" /> : <Undo size={13} />}
+                        <span className="hidden sm:inline">Undo</span>
+                      </Button>
+                    </IconTip>
+                  )}
+                  <IconTip tip="Revert — add a commit that undoes this one">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1"
+                      disabled={commitActions.busy}
+                      onClick={() => commitActions.run("revert", commitData)}
+                    >
+                      {busyAction === "revert" ? <RefreshCw size={13} className="animate-spin" /> : <Undo2 size={13} />}
+                      <span className="hidden sm:inline">Revert</span>
+                    </Button>
+                  </IconTip>
+                  {can.cherryPick && (
+                    <IconTip tip={`Cherry-pick onto ${commitActions.branch}`}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1"
+                        disabled={commitActions.busy}
+                        onClick={() => commitActions.run("cherryPick", commitData)}
+                      >
+                        {busyAction === "cherryPick" ? <RefreshCw size={13} className="animate-spin" /> : <Cherry size={13} />}
+                        <span className="hidden sm:inline">Cherry-pick</span>
+                      </Button>
+                    </IconTip>
+                  )}
+                </>
+              )}
               {(editing || (resolving && active.dirty)) && (
                 <Button variant="default" size="sm" className="h-7 gap-1" disabled={!active.dirty || isSaving} onClick={on.save}>
                   {isSaving ? <RefreshCw size={13} className="animate-spin" /> : <Save size={13} />}

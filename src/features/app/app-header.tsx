@@ -1,11 +1,11 @@
 import { useState, type ReactNode } from "react"
-import { Bot, Check, FilePlus, Folder, FolderGit2, FolderMinus, FolderPlus, GitBranch, Menu, Moon, PanelLeft, RefreshCw, RotateCcw, Search, Sun, Upload } from "lucide-react"
+import { Bot, Check, FilePlus, Folder, FolderGit2, FolderMinus, FolderPlus, GitBranch, Menu, Moon, PanelLeft, RefreshCw, RotateCcw, Search, Sun, TriangleAlert, Upload, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { ActionResult } from "@/features/changes/use-git-actions"
 import { projects } from "@/features/projects/projects"
 import { findWorktree, worktreeLabel } from "@/features/worktrees/worktrees"
-import type { ActionName, Worktree } from "@/lib/git/types"
+import type { ActionName, GitOperation, Worktree } from "@/lib/git/types"
 import { cn } from "@/lib/utils"
 
 function IconTip({ tip, children }: { tip: string; children: ReactNode }) {
@@ -14,6 +14,39 @@ function IconTip({ tip, children }: { tip: string; children: ReactNode }) {
       <TooltipTrigger asChild>{children}</TooltipTrigger>
       <TooltipContent side="bottom">{tip}</TooltipContent>
     </Tooltip>
+  )
+}
+
+const OPERATION_LABEL: Record<GitOperation, string> = {
+  merge: "Merge",
+  rebase: "Rebase",
+  "cherry-pick": "Cherry-pick",
+  revert: "Revert",
+}
+
+// A merge / rebase / cherry-pick / revert stopped half-way: finish or undo it.
+function OperationBanner({ operation, busyAction, onContinue, onAbort }: {
+  operation: GitOperation
+  busyAction: ActionName | null
+  onContinue: () => void
+  onAbort: () => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t border-border bg-amber-50 px-3 py-1.5 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200 sm:px-4">
+      <TriangleAlert size={14} className="shrink-0" />
+      <span className="min-w-0 flex-1">
+        <strong>{OPERATION_LABEL[operation]} in progress.</strong>{" "}
+        <span className="text-xs">Resolve any conflicts and mark the files resolved, then continue — or abort to go back.</span>
+      </span>
+      <Button size="sm" className="h-7 gap-1" disabled={!!busyAction} onClick={onContinue}>
+        {busyAction === "continueOperation" ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
+        Continue
+      </Button>
+      <Button variant="outline" size="sm" className="h-7 gap-1 text-destructive hover:text-destructive" disabled={!!busyAction} onClick={onAbort}>
+        {busyAction === "abortOperation" ? <RefreshCw size={13} className="animate-spin" /> : <X size={13} />}
+        Abort
+      </Button>
+    </div>
   )
 }
 
@@ -47,14 +80,28 @@ export function AppHeader(props: {
   onRemoveWorktree: (worktree: Worktree) => void
   onRefresh: () => void
   onCommit: (message: string) => Promise<boolean>
+  // Subject of HEAD; amending is offered only when there is one.
+  headSubject?: string
+  // An empty message keeps HEAD's.
+  onAmend: (message: string) => Promise<boolean>
   onPush: () => void
+  operation?: GitOperation
+  onContinueOperation: () => void
+  onAbortOperation: () => void
 }) {
-  const { error, loading, actionResult, busyAction, isDark, worktrees } = props
+  const { error, loading, actionResult, busyAction, isDark, worktrees, headSubject } = props
   const activeWorktree = findWorktree(worktrees, props.repoPath)
   const [commitMsg, setCommitMsg] = useState("")
+  const [amendOn, setAmendOn] = useState(false)
+  const amend = amendOn && !!headSubject
+  const canCommit = !busyAction && (amend || !!commitMsg.trim())
 
   const commit = async () => {
-    if (await props.onCommit(commitMsg)) setCommitMsg("")
+    if (!canCommit) return
+    if (await (amend ? props.onAmend(commitMsg) : props.onCommit(commitMsg))) {
+      setCommitMsg("")
+      setAmendOn(false)
+    }
   }
 
   return (
@@ -172,25 +219,53 @@ export function AppHeader(props: {
             </IconTip>
           </div>
         )}
-        <input
-          value={commitMsg}
-          onChange={e => setCommitMsg(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === "Enter" && commitMsg.trim() && !busyAction) commit()
-          }}
-          placeholder="Commit message…"
-          className={cn(inputCls, "col-span-2 h-9 min-w-40 flex-1 px-3 placeholder:text-muted-foreground")}
-        />
-        <Button size="sm" className="col-span-1 gap-1.5" disabled={!!busyAction || !commitMsg.trim()} onClick={commit}>
-          {busyAction === "commit" ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
-          Commit
+        <div className="relative col-span-2 min-w-40 flex-1">
+          <input
+            value={commitMsg}
+            onChange={e => setCommitMsg(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") {
+                e.preventDefault()
+                void commit()
+              }
+            }}
+            placeholder={amend ? `Empty keeps "${headSubject}"` : "Commit message…"}
+            title={amend ? `Amending "${headSubject}"` : undefined}
+            className={cn(inputCls, "h-9 w-full pl-3 pr-16 placeholder:text-muted-foreground", amend && "ring-1 ring-primary")}
+          />
+          {headSubject && (
+            <button
+              type="button"
+              aria-pressed={amend}
+              onClick={() => setAmendOn(!amendOn)}
+              title={amend ? "Stop amending — make a new commit" : `Amend the last commit ("${headSubject}") instead of making a new one`}
+              className={cn(
+                "absolute right-1.5 top-1/2 -translate-y-1/2 rounded px-1.5 py-0.5 text-[11px] font-medium focus:outline-none focus:ring-2 focus:ring-ring",
+                amend ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+              )}
+            >
+              Amend
+            </button>
+          )}
+        </div>
+        <Button type="button" size="sm" className="col-span-1 gap-1.5" disabled={!canCommit} onClick={() => void commit()}>
+          {busyAction === "commit" || busyAction === "amend" ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+          {amend ? "Amend" : "Commit"}
         </Button>
-        <Button variant="outline" size="sm" className="col-span-1 gap-1.5" disabled={!!busyAction} onClick={props.onPush}>
+        <Button type="button" variant="outline" size="sm" className="col-span-1 gap-1.5" disabled={!!busyAction} onClick={props.onPush}>
           {busyAction === "push" ? <RefreshCw size={14} className="animate-spin" /> : <Upload size={14} />}
           Push
         </Button>
       </form>
 
+      {props.operation && (
+        <OperationBanner
+          operation={props.operation}
+          busyAction={busyAction}
+          onContinue={props.onContinueOperation}
+          onAbort={props.onAbortOperation}
+        />
+      )}
       {error && (
         <div className="border-t border-border bg-destructive/10 px-3 py-1.5 text-sm text-destructive sm:px-4" title={error}>
           <span className="line-clamp-1">{error}</span>

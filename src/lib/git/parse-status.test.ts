@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { parseStatus } from "./parse-status"
+import { parseBranchHeader, parseStatus } from "./parse-status"
 
 describe("parseStatus", () => {
   it("splits files with staged and unstaged changes into two entries", () => {
@@ -41,5 +41,27 @@ describe("parseStatus conflicts", () => {
       { path: "deleted-by-us.txt", status: "conflicted", staged: false },
       { path: "staged.txt", status: "modified", staged: true, oldPath: undefined },
     ])
+  })
+})
+
+describe("parseBranchHeader", () => {
+  it("reads upstream and ahead/behind counts", () => {
+    expect(parseBranchHeader("## main...origin/main [ahead 1, behind 2]\n M a.ts\n")).toEqual({ upstream: "origin/main", ahead: 1, behind: 2 })
+    expect(parseBranchHeader("## feat/x...origin/feat/x [behind 3]\n")).toEqual({ upstream: "origin/feat/x", ahead: 0, behind: 3 })
+    expect(parseBranchHeader("## main...origin/main\n")).toEqual({ upstream: "origin/main", ahead: 0, behind: 0 })
+  })
+
+  it("flags an upstream deleted on the remote", () => {
+    expect(parseBranchHeader("## main...origin/main [gone]\n")).toEqual({ upstream: "origin/main", ahead: 0, behind: 0, gone: true })
+  })
+
+  it("has no upstream for local-only, unborn and detached HEADs", () => {
+    for (const line of ["## main", "## No commits yet on main", "## HEAD (no branch)", ""]) {
+      expect(parseBranchHeader(line)).toEqual({ ahead: 0, behind: 0 })
+    }
+  })
+
+  it("is skipped by parseStatus", () => {
+    expect(parseStatus("## main...origin/main [ahead 1]\n?? a.ts\n")).toEqual([{ path: "a.ts", status: "untracked", staged: false }])
   })
 })

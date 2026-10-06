@@ -13,9 +13,22 @@ export interface GitFile {
   oldPath?: string
 }
 
+// A multi-step git operation stopped half-way (usually on conflicts).
+export type GitOperation = "merge" | "rebase" | "cherry-pick" | "revert"
+
 export interface StatusResponse {
   files: GitFile[]
   branch: string
+  // Full sha and subject of HEAD; absent before the first commit.
+  head?: string
+  headSubject?: string
+  // The current branch's upstream ("origin/main") and how far HEAD is ahead
+  // of / behind it. `gone`: the upstream branch was deleted on the remote.
+  upstream?: string
+  ahead: number
+  behind: number
+  gone?: boolean
+  operation?: GitOperation
 }
 
 // One entry of `git worktree list`. The first entry is always the main worktree.
@@ -188,6 +201,14 @@ export const ACTION_NAMES = [
   "stashPop",
   "stashApply",
   "stashDrop",
+  "fetch",
+  "pull",
+  "amend",
+  "undoCommit",
+  "revert",
+  "cherryPick",
+  "continueOperation",
+  "abortOperation",
 ] as const
 
 export type ActionName = (typeof ACTION_NAMES)[number]
@@ -206,11 +227,18 @@ export interface ActionPayload {
   base?: string
   // removeWorktree: remove even with uncommitted changes.
   // deleteBranch: delete even when not fully merged.
+  // push: overwrite the remote branch (--force-with-lease).
   force?: boolean
   // createBranch: switch to the new branch.
   checkout?: boolean
   // switchBranch: stash uncommitted changes first instead of refusing.
+  // pull: stash them around the pull (--autostash).
   stash?: boolean
+  // pull: rebase onto the upstream instead of fast-forwarding only.
+  rebase?: boolean
+  // revert/cherryPick: the commit. undoCommit: the HEAD the UI saw (refused
+  // if HEAD has moved since).
+  sha?: string
   // stash: include untracked files.
   includeUntracked?: boolean
   // stashPop/stashApply/stashDrop: n in stash@{n}.
@@ -221,6 +249,10 @@ export interface ActionRequest extends ActionPayload {
   action: ActionName
   repo?: string
 }
+
+// Starts the error of a push the remote refused as non-fast-forward, so the
+// UI can offer a force push.
+export const PUSH_REJECTED = "Push rejected"
 
 export interface ActionResponse {
   success: true

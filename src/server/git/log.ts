@@ -4,20 +4,31 @@ import type { CommitResponse, LogResponse } from "@/lib/git/types"
 import { HttpError } from "../http"
 import { resolveInRepo } from "../repo"
 import { EMPTY_TREE, git, isUnbornHead } from "./exec"
-import { requireSha } from "./refs"
+import { refExists, requireRef, requireSha } from "./refs"
 
 export const MAX_LOG_LIMIT = 200
 
-// Commit history of HEAD, newest first; `file` limits it to commits touching
-// that file (following renames).
+// A local or remote branch name ("main", "origin/main") → its full ref.
+async function branchRef(repo: string, name: string): Promise<string> {
+  const branch = requireRef(name, "Branch")
+  for (const ref of [`refs/heads/${branch}`, `refs/remotes/${branch}`]) {
+    if (await refExists(repo, ref)) return ref
+  }
+  throw new HttpError(400, `Unknown branch: ${branch}`)
+}
+
+// Commit history of HEAD (or of the branch `ref`), newest first; `file`
+// limits it to commits touching that file (following renames).
 export async function getLog(
   repo: string,
-  { file, limit, skip }: { file?: string; limit: number; skip: number }
+  { file, ref, limit, skip }: { file?: string; ref?: string; limit: number; skip: number }
 ): Promise<LogResponse> {
   if (file) resolveInRepo(repo, file)
   // One extra commit tells whether another page exists.
   const args = ["log", LOG_FORMAT, `--max-count=${limit + 1}`, `--skip=${skip}`]
-  if (file) args.push("--follow", "--", file)
+  if (ref) args.push(await branchRef(repo, ref))
+  if (file) args.push("--follow")
+  args.push("--", ...(file ? [file] : []))
   let stdout: string
   try {
     stdout = (await git(repo, args)).stdout
