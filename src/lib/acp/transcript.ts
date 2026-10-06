@@ -1,5 +1,5 @@
 import type { PermissionOption, PlanEntry, StopReason, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolKind } from "@agentclientprotocol/sdk"
-import type { AcpEvent, SeqEvent, SessionConfig, SessionState } from "./types"
+import type { AcpEvent, SeqEvent, SessionConfig, SessionState, ShellResult } from "./types"
 
 // Folds a session's event log into the chat items the panel renders.
 
@@ -29,6 +29,18 @@ export type ChatItem =
   | { kind: "turn_end"; id: string; stopReason: StopReason | "error" }
   | { kind: "error"; id: string; message: string }
   | { kind: "notice"; id: string; severity: string; title: string; description?: string }
+  | {
+      kind: "shell"
+      id: string
+      shellId: string
+      command: string
+      // false = `!!`: not sent to the agent
+      share: boolean
+      lines: string[]
+      dropped: number
+      // Set once the command has finished
+      result: ShellResult | null
+    }
 
 export interface Transcript {
   items: ChatItem[]
@@ -104,6 +116,19 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
       case "error":
         items.push({ kind: "error", id, message: event.message })
         break
+      case "shell_start":
+        items.push({ kind: "shell", id, shellId: event.shellId, command: event.command, share: event.share, lines: [], dropped: 0, result: null })
+        break
+      case "shell_output":
+      case "shell_end": {
+        const i = indexWhere(item => item.kind === "shell" && item.shellId === event.shellId)
+        const item = items[i]
+        if (item?.kind !== "shell" || item.result) break
+        items[i] = event.type === "shell_end"
+          ? { ...item, lines: event.result.lines, dropped: event.result.dropped, result: event.result }
+          : { ...item, lines: event.lines, dropped: event.dropped }
+        break
+      }
       case "permission_request":
         items.push({
           kind: "permission",

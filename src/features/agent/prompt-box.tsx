@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { AtSign, FileCode, FileDiff, Loader2, Send, Square, X } from "lucide-react"
+import { AtSign, EyeOff, FileCode, FileDiff, Loader2, Send, Square, SquareTerminal, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { extractMentions, insertMention, mentionAt, rankFiles, removeMention } from "@/lib/acp/mentions"
+import { parsePromptInput } from "@/lib/acp/shell-prefix"
 import { cn } from "@/lib/utils"
 import { ConfigBar } from "./config-bar"
 import type { Agent } from "./use-agent"
@@ -95,7 +96,8 @@ function fileName(path: string) {
   return path.slice(path.lastIndexOf("/") + 1)
 }
 
-// Prompt input: @-mention files (sent to the agent as resource links),
+// Prompt input: `!cmd` / `!!cmd` run a shell command (shared with the agent
+// on the next prompt / private), @-mention files (sent to the agent as resource links),
 // quick buttons to mention the open file or all changed files, chips for
 // what will be attached, a drag handle for its height, and below it the
 // agent's settings (model, thinking, mode…) with context usage.
@@ -121,6 +123,11 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
   useEffect(() => {
     if (agent.sessionId) boxRef.current?.focus()
   }, [agent.sessionId, boxRef])
+
+  const input = useMemo(() => parsePromptInput(text), [text])
+  const isShell = input.kind === "shell"
+  const shellRunning = agent.transcript.items.some(item => item.kind === "shell" && !item.result)
+  const canSend = !disabled && agent.pending !== "send" && (input.kind === "shell" ? !!input.command && !shellRunning : !!input.text && !busy)
 
   const known = useMemo(() => new Set([...files, ...changedFiles]), [files, changedFiles])
   const attached = useMemo(() => extractMentions(text, known), [text, known])
@@ -168,9 +175,9 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
   }
 
   const send = async () => {
-    const prompt = text.trim()
-    if (!prompt || busy || disabled || agent.pending === "send") return
-    if (await agent.send(prompt, attached)) {
+    if (!canSend) return
+    const ok = input.kind === "shell" ? await agent.runShell(input.command, input.share) : await agent.send(input.text, attached)
+    if (ok) {
       setText("")
       setCaret(0)
       setDismissedAt(null)
@@ -234,7 +241,18 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
         />
       </div>
 
-      {attached.length > 0 && (
+      {isShell && (
+        <div className="flex items-center gap-1.5 px-2 pb-1.5 text-[11px] text-muted-foreground">
+          {input.share ? <SquareTerminal size={12} className="shrink-0" /> : <EyeOff size={12} className="shrink-0" />}
+          <span className="font-medium text-foreground">Shell</span>
+          <span>
+            {input.share ? "· runs in the repo, output goes to the agent with your next message (!! to keep it private)" : "· runs in the repo, output stays private"}
+            {shellRunning && " · a command is still running"}
+          </span>
+        </div>
+      )}
+
+      {!isShell && attached.length > 0 && (
         <div className="flex flex-wrap gap-1 px-2 pb-1.5">
           {attached.map(path => (
             <span key={path} title={path} className="flex max-w-full items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
@@ -294,17 +312,17 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
             style={height === null ? undefined : { height }}
             disabled={disabled}
             aria-autocomplete="list"
-            placeholder={disabled ? "Start or resume a session first" : "Message the agent… (@ to mention a file, Shift+Enter for a new line)"}
+            placeholder={disabled ? "Start or resume a session first" : "Message the agent… (@ to mention a file, !cmd to run a command, Shift+Enter for a new line)"}
             className="block min-h-14 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
           />
         </div>
-        {busy ? (
+        {busy && !isShell ? (
           <Button variant="outline" size="icon" className="h-9 w-9 shrink-0" title="Stop" onClick={() => void agent.cancel()}>
             <Square size={14} />
           </Button>
         ) : (
-          <Button size="icon" className="h-9 w-9 shrink-0" title="Send (Enter)" disabled={disabled || !text.trim() || agent.pending === "send"} onClick={() => void send()}>
-            {agent.pending === "send" ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+          <Button size="icon" className="h-9 w-9 shrink-0" title={isShell ? "Run (Enter)" : "Send (Enter)"} disabled={!canSend} onClick={() => void send()}>
+            {agent.pending === "send" ? <Loader2 size={14} className="animate-spin" /> : isShell ? <SquareTerminal size={14} /> : <Send size={14} />}
           </Button>
         )}
       </div>

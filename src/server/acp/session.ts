@@ -2,7 +2,7 @@ import "server-only"
 import { randomUUID } from "crypto"
 import type { PermissionOption, RequestPermissionResponse, SessionConfigOption, SessionModeState, SessionUpdate, ToolCallUpdate } from "@agentclientprotocol/sdk"
 import { autoApproveOption } from "@/lib/acp/permissions"
-import type { AcpEvent, SeqEvent, SessionConfig, SessionState } from "@/lib/acp/types"
+import type { AcpEvent, SeqEvent, SessionConfig, SessionState, ShellResult } from "@/lib/acp/types"
 
 // Older events are dropped past this; a client that reconnects from before
 // the oldest one gets a reset + full replay of what's left.
@@ -13,6 +13,12 @@ export const DEFAULT_TITLE = "New session"
 interface Subscriber {
   send: (event: SeqEvent) => void
   close: () => void
+}
+
+// The `!` command running in this session (one at a time).
+export interface RunningShell {
+  id: string
+  stop: () => void
 }
 
 interface PendingPermission {
@@ -29,6 +35,10 @@ export class AgentSession {
   connected = true
   updatedAt = new Date()
   config: SessionConfig = { configOptions: [], modes: null, usage: null }
+  shell: RunningShell | null = null
+  // Shared (`!`) command results not yet sent to the agent; the next
+  // prompt carries them.
+  sharedShell: ShellResult[] = []
   private events: SeqEvent[] = []
   private seq = 0
   private subscribers = new Set<Subscriber>()
@@ -53,6 +63,13 @@ export class AgentSession {
     this.events.push(entry)
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS)
     this.updatedAt = new Date()
+    for (const sub of this.subscribers) sub.send(entry)
+  }
+
+  // Live-only event: streamed to whoever is connected, not logged. It
+  // reuses the current seq so Last-Event-ID resumes stay correct.
+  broadcast(event: AcpEvent) {
+    const entry = { seq: this.seq, event }
     for (const sub of this.subscribers) sub.send(entry)
   }
 
@@ -141,6 +158,7 @@ export class AgentSession {
   disconnect(message?: string) {
     if (!this.connected) return
     this.cancelPending()
+    this.shell?.stop()
     if (message) this.push({ type: "error", message })
     this.connected = false
     this.busy = false

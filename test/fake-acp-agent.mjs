@@ -2,6 +2,7 @@
 // Minimal ACP agent over stdio for tests. Behaviour depends on the prompt:
 //   "hello"  streams two chunks        "edit"  tool call + permission request
 //   "wait"   runs until cancelled      "crash" exits the process
+//   ...+"echo" (last text block) replies with the earlier text blocks
 import { Readable, Writable } from "node:stream"
 import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk"
 
@@ -64,6 +65,11 @@ const agent = conn => ({
     const text = prompt.map(b => b.text ?? "").join("")
     const update = (u) => conn.sessionUpdate({ sessionId, update: u })
     if (text === "crash") process.exit(3)
+    const texts = prompt.filter(b => b.type === "text").map(b => b.text)
+    if (texts.at(-1) === "echo") {
+      await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: texts.slice(0, -1).join("\n---\n") } })
+      return { stopReason: "end_turn" }
+    }
     if (text === "wait") {
       return new Promise(resolve => running.set(sessionId, () => resolve({ stopReason: "cancelled" })))
     }

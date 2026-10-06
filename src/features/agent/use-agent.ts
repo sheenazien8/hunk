@@ -125,7 +125,8 @@ export function useAgent(repo: string, enabled: boolean, onFilesChanged: () => v
       filesTimer = setTimeout(() => onFilesChangedRef.current(), FILES_CHANGED_DEBOUNCE_MS)
     }
     const watchFiles = (event: AcpEvent) => {
-      if (event.type === "turn_end") return filesChanged()
+      // A finished `!` command may have changed the tree too (checkout, format…)
+      if (event.type === "turn_end" || event.type === "shell_end") return filesChanged()
       if (event.type !== "update") return
       const u = event.update
       if (u.sessionUpdate === "tool_call" && u.kind) toolKinds.set(u.toolCallId, u.kind)
@@ -184,6 +185,17 @@ export function useAgent(repo: string, enabled: boolean, onFilesChanged: () => v
     }
   }, [act])
 
+  // `!` (share) / `!!` command, run by the server, not the agent
+  const runShell = useCallback(async (command: string, share: boolean) => {
+    setPending("send")
+    setError("")
+    try {
+      return await act({ action: "shell", command, share })
+    } finally {
+      setPending(null)
+    }
+  }, [act])
+
   const changeSetting = useCallback(async (id: string, action: AcpAction) => {
     setConfigPending(id)
     setError("")
@@ -212,6 +224,8 @@ export function useAgent(repo: string, enabled: boolean, onFilesChanged: () => v
     resume,
     send,
     cancel: () => act({ action: "cancel" }),
+    runShell,
+    stopShell: (shellId: string) => act({ action: "shellStop", shellId }),
     answer: (requestId: string, optionId: string | null) => act({ action: "permission", requestId, optionId }),
     setAutoApprove: (enabled: boolean) => act({ action: "autoApprove", enabled }),
     configPending,

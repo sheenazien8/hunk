@@ -45,7 +45,7 @@ function Messages({ agent, repo, onOpenFile }: { agent: Agent; repo: string; onO
           </div>
         )}
         {items.map(item => (
-          <ChatItemView key={item.id} item={item} repo={repo} onOpenFile={onOpenFile} onAnswer={agent.answer} />
+          <ChatItemView key={item.id} item={item} repo={repo} onOpenFile={onOpenFile} onAnswer={agent.answer} onStopShell={agent.stopShell} />
         ))}
         {state.busy && !waiting && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite">

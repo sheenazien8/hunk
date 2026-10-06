@@ -56,7 +56,8 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── fs/walk.ts              # All Files walker + ignore-pattern matching
 │   └── acp/                    # agent chat: config.ts (acp.config.json), agent-process.ts (spawn +
 │                               #   SDK ClientSideConnection), session.ts (event log, permissions),
-│                               #   registry.ts (globalThis maps, list/open/prompt/cancel/close, idle reaper)
+│                               #   registry.ts (globalThis maps, list/open/prompt/cancel/close, idle reaper),
+│                               #   shell.ts (`!`/`!!` prompt-box commands)
 ├── src/lib/                    # isomorphic + pure (no "use client", no server-only)
 │   ├── git/types.ts            # API contract shared by routes and client (GitFile, RepoEntry, ActionName…)
 │   ├── git/parse-status.ts     # porcelain v1 parser (one entry per staged/unstaged side)
@@ -66,7 +67,8 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── git/parse-conflict.ts   # conflict-marker parser + resolveConflict(content, i, ours|theirs|both)
 │   ├── acp/                    # agent chat contract (types.ts), transcript.ts (event log → chat items),
 │                               #   line-diff.ts (ACP diff → unified diff), permissions.ts, mentions.ts (@file parsing/ranking),
-│                               #   agent-config.ts (settings → toolbar controls, context usage)
+│                               #   agent-config.ts (settings → toolbar controls, context usage), shell-prefix.ts (!/!! parsing),
+│                               #   tail-lines.ts (last-150-lines output buffer)
 │   ├── time-ago.ts             # compact relative times ("5m", "2d")
 │   ├── api-client.ts           # `api.*` typed fetchers — the ONLY place that calls /api/git/* and /api/acp/*
 │   ├── auth.ts                 # JWT sign/verify, cookies, credentials from env
@@ -181,6 +183,7 @@ Vitest (`vitest.config.mts`, node env). Unit tests sit next to the code (`*.test
     *   Agent env strips `CLAUDECODE`/`NODE_OPTIONS` (claude refuses to start "nested" when Hunk itself was launched from Claude Code).
     *   **@-mentions**: `@path` stays in the prompt text; on send, mentioned paths that are real repo files go along as `files` and the server adds one ACP `resource_link` (`file://` URI, `resolveInRepo()`-checked, max 50) per file. Suggestions skip git-ignored files (`mentionableFiles()`: All Files entries with status `ignored`, i.e. neither `ls-files --cached` nor `--others --exclude-standard`). A mention ends at whitespace, so paths with spaces can't be mentioned.
     *   **Agent settings toolbar** (model, thinking/effort, mode, …): built only from what the agent advertises — ACP `configOptions` from session/new|load|resume, kept current by `config_option_update` / `current_mode_update` and by `setSessionConfigOption` responses. The legacy `modes` list is shown only when an agent sends no config options (pi's modes duplicate its thinking levels). `AgentSession.config` holds the latest snapshot and the SSE route sends it right after a `reset`, so it survives the event buffer rolling over. Options can disappear after a change (Claude drops Effort for haiku), so controls always re-render from the latest list. Context usage comes from `usage_update`.
+    *   **Shell commands** (plan `docs/plan/27-agent-chat-shell-commands.md`): `!cmd` in the prompt box runs `cmd` on the server (`server/acp/shell.ts`, `$SHELL -c` in the session's repo, own process group, no stdin, one per session) — **not** the agent. This is the one deliberate exception to "never a shell"; it grants nothing a logged-in user can't already get from the agent. `HUNK_SHELL_DISABLED=1` turns it off. Env (read per run, set in `.env.local`): `HUNK_SHELL_MAX_LINES` (default 150, max 5000) and `HUNK_SHELL_TIMEOUT` (seconds, default 300). Output = last N lines (`lib/acp/tail-lines.ts`, shared by server and transcript). `!` results are prepended to the **next** prompt once (`session.sharedShell`); `!!cmd` is private and never reaches the agent; a request without `share` counts as private; `\!` sends a literal `!`. Live output goes out as `shell_output` snapshots via `session.broadcast()` (not logged, current seq), only `shell_start`/`shell_end` are logged.
     *   Auto mode is client-side (Hunk answers `allow_once`, then `allow_always`), per session, default off.
     *   **Docker**: the image installs `claude-agent-acp` (musl build), `pi` (`@earendil-works/pi-coding-agent`, pinned to the host's version) + `pi-acp`, and bash + ripgrep + fd, and ships `acp.config.example.json` as its `acp.config.json` (the host's own file is dockerignored). Compose mounts `~/.claude`, `~/.claude.json` and `~/.pi` into `/home/node` for logins, settings and sessions, and hides `~/.pi/agent/bin` behind a tmpfs (the host's glibc `fd`/`rg` can't run on alpine). The agents' tools only see the container's toolchain.
     *   `next dev` blocks HMR/dev resources for non-`localhost` origins (e.g. `127.0.0.1`); smoke-test the UI over `localhost` or against a production build.

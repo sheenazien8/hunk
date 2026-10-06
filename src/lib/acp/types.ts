@@ -27,6 +27,19 @@ export interface SessionState {
   connected: boolean
 }
 
+// A `!` / `!!` command run from the prompt box: the real process output,
+// last SHELL_MAX_LINES lines (stdout and stderr interleaved).
+export interface ShellResult {
+  command: string
+  lines: string[]
+  // Earlier lines that were cut
+  dropped: number
+  exitCode: number | null
+  signal: string | null
+  timedOut: boolean
+  durationMs: number
+}
+
 // What the server appends to a session's event log and streams over SSE.
 // `reset` is stream-only: it tells the client to drop what it has because
 // the replay that follows starts from the beginning of the buffer.
@@ -44,6 +57,12 @@ export type AcpEvent =
   // current_mode_update / usage_update updates.
   | { type: "config"; config: SessionConfig }
   | { type: "reset" }
+  // `!` / `!!` commands. `share` = the result goes to the agent with the
+  // next prompt. shell_output is a snapshot of the output so far, sent live
+  // only (never logged; reconnecting clients get the next one).
+  | { type: "shell_start"; shellId: string; command: string; share: boolean }
+  | { type: "shell_output"; shellId: string; lines: string[]; dropped: number }
+  | { type: "shell_end"; shellId: string; result: ShellResult }
 
 export interface SeqEvent {
   seq: number
@@ -88,5 +107,8 @@ export type AcpAction =
   | { action: "setConfig"; configId: string; value: string | boolean }
   | { action: "setMode"; modeId: string }
   | { action: "close" }
+  // Runs `command` in the session's repo; share = !, private = !!
+  | { action: "shell"; command: string; share?: boolean }
+  | { action: "shellStop"; shellId: string }
 
 export type AcpActionRequest = AcpAction & { sessionId: string }

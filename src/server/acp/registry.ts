@@ -7,6 +7,7 @@ import { resolveInRepo } from "../repo"
 import { AgentProcess } from "./agent-process"
 import { findAgent, type AgentConfig } from "./config"
 import { AgentSession, DEFAULT_TITLE } from "./session"
+import { runShell, shellContext, stopShell } from "./shell"
 
 const IDLE_MS = 30 * 60_000
 const REAP_INTERVAL_MS = 60_000
@@ -97,7 +98,7 @@ function reapIdle() {
   for (const p of registry.processes.values()) {
     void p.then(proc => {
       const sessions = sessionsOf(proc)
-      if (sessions.some(s => s.busy || s.subscriberCount > 0 || s.pendingCount > 0)) {
+      if (sessions.some(s => s.busy || s.shell || s.subscriberCount > 0 || s.pendingCount > 0)) {
         proc.touch()
         return
       }
@@ -234,6 +235,11 @@ async function prompt(session: AgentSession, text: string, files?: unknown) {
   const blocks = promptBlocks(session.repo, text, files)
   if (session.busy) throw new HttpError(409, "The agent is still working on the previous prompt")
   const proc = await processOf(session)
+  // `!` commands run since the last prompt go first, once.
+  if (session.sharedShell.length > 0) {
+    blocks.unshift({ type: "text", text: shellContext(session.sharedShell) })
+    session.sharedShell = []
+  }
   session.busy = true
   if (session.title === DEFAULT_TITLE) session.title = titleFrom(text)
   session.push({ type: "user_prompt", text })
@@ -309,6 +315,11 @@ export async function runAction(session: AgentSession, action: AcpAction): Promi
       return setMode(session, action.modeId)
     case "close":
       return close(session)
+    case "shell":
+      // A missing `share` is private: never leak output by accident.
+      return runShell(session, String(action.command ?? ""), action.share === true)
+    case "shellStop":
+      return stopShell(session, action.shellId)
     default:
       throw new HttpError(400, `Unknown action: ${(action as { action: string }).action}`)
   }

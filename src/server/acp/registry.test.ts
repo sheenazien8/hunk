@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import os from "os"
 import path from "path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
@@ -198,5 +198,111 @@ describe("registry with a fake agent", () => {
     const session = getSession(await openSession(repoDir("close"), "fake"))
     await runAction(session, { action: "close" })
     expect(() => getSession(session.id)).toThrow(/not found/)
+  })
+})
+
+describe("shell commands", () => {
+  const ended = (e: AcpEvent) => e.type === "shell_end"
+  const resultOf = (events: AcpEvent[]) => (events.at(-1) as Extract<AcpEvent, { type: "shell_end" }>).result
+
+  async function shell(session: AgentSession, command: string, share?: boolean) {
+    const done = waitFor(session, ended)
+    await runAction(session, { action: "shell", command, share })
+    return done
+  }
+
+  it("runs in the repo and reports the real output", async () => {
+    const repo = repoDir("shell-run")
+    const session = getSession(await openSession(repo, "fake"))
+    const events = await shell(session, "pwd; echo err >&2; exit 3", true)
+    expect(events[0]).toMatchObject({ type: "shell_start", command: "pwd; echo err >&2; exit 3", share: true })
+    expect(resultOf(events)).toMatchObject({ lines: [repo, "err"], dropped: 0, exitCode: 3, signal: null, timedOut: false })
+    expect(session.shell).toBeNull()
+  })
+
+  it("keeps the last 150 lines", async () => {
+    const session = getSession(await openSession(repoDir("shell-tail"), "fake"))
+    const result = resultOf(await shell(session, "seq 1 1000"))
+    expect(result.lines).toHaveLength(150)
+    expect(result.lines[0]).toBe("851")
+    expect(result.dropped).toBe(850)
+  })
+
+  it("runs while the agent is busy, one command at a time", async () => {
+    const session = getSession(await openSession(repoDir("shell-busy"), "fake"))
+    await runAction(session, { action: "prompt", text: "wait" })
+    const started = waitFor(session, e => e.type === "shell_start")
+    await runAction(session, { action: "shell", command: "sleep 30", share: true })
+    const start = (await started).at(-1) as Extract<AcpEvent, { type: "shell_start" }>
+    await expect(runAction(session, { action: "shell", command: "ls" })).rejects.toThrow(/still running/)
+    const done = waitFor(session, ended)
+    await runAction(session, { action: "shellStop", shellId: start.shellId })
+    expect(resultOf(await done)).toMatchObject({ signal: "SIGTERM", exitCode: null })
+    await expect(runAction(session, { action: "shellStop", shellId: start.shellId })).rejects.toThrow(/not running/)
+    const turn = waitFor(session, isTurnEnd)
+    await runAction(session, { action: "cancel" })
+    await turn
+  })
+
+  it("sends ! output with the next prompt only, never !! output", async () => {
+    const session = getSession(await openSession(repoDir("shell-share"), "fake"))
+    await shell(session, "echo shared-a", true)
+    await shell(session, "echo private-b", false)
+    await shell(session, "echo default-private")
+    await shell(session, "echo shared-c", true)
+
+    const reply = async () => {
+      const done = waitFor(session, e => e.type === "state" && !e.state.busy)
+      await runAction(session, { action: "prompt", text: "echo" })
+      const events = await done
+      return events.flatMap(e => (e.type === "update" && e.update.sessionUpdate === "agent_message_chunk" && e.update.content.type === "text" ? [e.update.content.text] : [])).join("")
+    }
+    const first = await reply()
+    expect(first).toContain("$ echo shared-a\nshared-a")
+    expect(first).toContain("$ echo shared-c\nshared-c")
+    expect(first).not.toContain("private-b")
+    expect(first).not.toContain("default-private")
+    expect(await reply()).toBe("")
+  })
+
+  it("close kills a running command", async () => {
+    const session = getSession(await openSession(repoDir("shell-close"), "fake"))
+    const pidFile = path.join(tmp, "shell-close.pid")
+    const started = waitFor(session, e => e.type === "shell_start")
+    await runAction(session, { action: "shell", command: `sleep 30 & echo $! > ${pidFile}; wait` })
+    await started
+    await new Promise(r => setTimeout(r, 200))
+    const pid = Number(readFileSync(pidFile, "utf-8"))
+    await runAction(session, { action: "close" })
+    await new Promise(r => setTimeout(r, 200))
+    expect(() => process.kill(pid, 0)).toThrow()
+    expect(session.since(0).events.some(e => e.event.type === "shell_end")).toBe(true)
+  })
+
+  it("takes its line limit and timeout from the env", async () => {
+    const session = getSession(await openSession(repoDir("shell-env"), "fake"))
+    process.env.HUNK_SHELL_MAX_LINES = "10"
+    process.env.HUNK_SHELL_TIMEOUT = "1"
+    try {
+      const lines = resultOf(await shell(session, "seq 1 100"))
+      expect(lines.lines).toEqual(Array.from({ length: 10 }, (_, i) => String(91 + i)))
+      expect(lines.dropped).toBe(90)
+      expect(resultOf(await shell(session, "sleep 30"))).toMatchObject({ timedOut: true, signal: "SIGTERM" })
+      process.env.HUNK_SHELL_MAX_LINES = "nope"
+      expect(resultOf(await shell(session, "seq 1 200")).lines).toHaveLength(150)
+    } finally {
+      delete process.env.HUNK_SHELL_MAX_LINES
+      delete process.env.HUNK_SHELL_TIMEOUT
+    }
+  })
+
+  it("can be turned off", async () => {
+    const session = getSession(await openSession(repoDir("shell-off"), "fake"))
+    process.env.HUNK_SHELL_DISABLED = "1"
+    try {
+      await expect(runAction(session, { action: "shell", command: "ls", share: true })).rejects.toThrow(/disabled/)
+    } finally {
+      delete process.env.HUNK_SHELL_DISABLED
+    }
   })
 })

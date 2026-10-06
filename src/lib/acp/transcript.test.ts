@@ -122,3 +122,25 @@ describe("repoRelative", () => {
     expect(repoRelative("/r/repo", "./src/a.ts")).toBe("src/a.ts")
   })
 })
+
+describe("shell items", () => {
+  const result = { command: "ls", lines: ["a", "b"], dropped: 3, exitCode: 0, signal: null, timedOut: false, durationMs: 5 }
+
+  it("follows a command from start to end", () => {
+    let t = applyEvents(emptyTranscript(), seq([{ type: "shell_start", shellId: "x", command: "ls", share: false }]))
+    expect(t.items).toEqual([{ kind: "shell", id: "e1", shellId: "x", command: "ls", share: false, lines: [], dropped: 0, result: null }])
+    t = applyEvents(t, seq([{ type: "shell_output", shellId: "x", lines: ["a"], dropped: 0 }], 1))
+    expect(t.items[0]).toMatchObject({ lines: ["a"], result: null })
+    t = applyEvents(t, seq([{ type: "shell_end", shellId: "x", result }], 2))
+    expect(t.items[0]).toMatchObject({ lines: ["a", "b"], dropped: 3, result })
+  })
+
+  it("ignores output that arrives after the end", () => {
+    const items = run([
+      { type: "shell_start", shellId: "x", command: "ls", share: true },
+      { type: "shell_end", shellId: "x", result },
+      { type: "shell_output", shellId: "x", lines: ["late"], dropped: 0 },
+    ])
+    expect(items[0]).toMatchObject({ lines: ["a", "b"] })
+  })
+})

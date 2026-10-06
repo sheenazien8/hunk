@@ -37,7 +37,7 @@ const children: Set<ChildProcess> = (g.__hunkAcpChildren ??= (() => {
   return set
 })())
 
-function agentEnv(extra: Record<string, string> | undefined): NodeJS.ProcessEnv {
+export function agentEnv(extra: Record<string, string> | undefined): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
   for (const key of STRIPPED_ENV) delete env[key]
   return env

@@ -4,13 +4,14 @@ import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
 import type { ToolCallContent, ToolKind } from "@agentclientprotocol/sdk"
 import {
-  AlertTriangle, Brain, Check, ChevronRight, Circle, CircleDot, FileEdit, FileSearch, Globe, Info,
-  Loader2, ShieldQuestion, SquareTerminal, Trash2, Wrench, X, Zap,
+  AlertTriangle, Brain, Check, ChevronRight, Circle, CircleDot, Copy, EyeOff, FileEdit, FileSearch, Globe, Info,
+  Loader2, ShieldQuestion, Square, SquareTerminal, Trash2, Wrench, X, Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DiffView } from "@/features/viewer/diff-view"
 import { unifiedDiff } from "@/lib/acp/line-diff"
 import { repoRelative, type ChatItem } from "@/lib/acp/transcript"
+import type { ShellResult } from "@/lib/acp/types"
 import { cn } from "@/lib/utils"
 
 const MAX_RAW = 4000
@@ -149,6 +150,65 @@ function ToolBlock({ item, repo, onOpenFile }: { item: Extract<ChatItem, { kind:
   )
 }
 
+function shellStatus(result: ShellResult): { label: string; ok: boolean } {
+  if (result.timedOut) return { label: "timed out", ok: false }
+  if (result.signal) return { label: "stopped", ok: false }
+  if (result.exitCode === null) return { label: "failed", ok: false }
+  return { label: `exit ${result.exitCode}`, ok: result.exitCode === 0 }
+}
+
+function duration(ms: number) {
+  return ms < 1000 ? `${ms}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
+}
+
+// A `!` / `!!` command and its real output (the last lines of it).
+function ShellBlock({ item, onStop }: { item: Extract<ChatItem, { kind: "shell" }>; onStop: (shellId: string) => void }) {
+  const [copied, setCopied] = useState(false)
+  const status = item.result && shellStatus(item.result)
+  const copy = () => {
+    void navigator.clipboard?.writeText(item.lines.join("\n")).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }, () => {})
+  }
+  return (
+    <div className="rounded-md border border-border bg-card">
+      <div className="flex min-w-0 items-center gap-2 px-2 py-1.5 text-xs">
+        <SquareTerminal size={14} className="shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate font-mono" title={item.command}>$ {item.command}</span>
+        {!item.share && (
+          <span title="Not shared with the agent (!!)" className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+            <EyeOff size={12} />
+            private
+          </span>
+        )}
+        {item.result && <span className="shrink-0 text-[10px] text-muted-foreground">{duration(item.result.durationMs)}</span>}
+        {status ? (
+          <span className={cn("shrink-0 font-mono text-[10px]", status.ok ? "text-green-600 dark:text-green-400" : "text-destructive")}>{status.label}</span>
+        ) : (
+          <>
+            <Loader2 size={14} className="shrink-0 animate-spin text-muted-foreground" aria-label="running" />
+            <button type="button" title="Stop" className="shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onStop(item.shellId)}>
+              <Square size={12} />
+            </button>
+          </>
+        )}
+        {item.lines.length > 0 && (
+          <button type="button" title="Copy output" className="shrink-0 text-muted-foreground hover:text-foreground" onClick={copy}>
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+          </button>
+        )}
+      </div>
+      {(item.lines.length > 0 || item.dropped > 0) && (
+        <div className="border-t border-border">
+          {item.dropped > 0 && <div className="px-2 pt-1 text-[10px] text-muted-foreground">… {item.dropped} earlier {item.dropped === 1 ? "line" : "lines"} hidden</div>}
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-xs">{item.lines.join("\n")}</pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ThoughtBlock({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   return (
@@ -221,11 +281,12 @@ function PermissionBlock({ item, onAnswer }: { item: Extract<ChatItem, { kind: "
   )
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, repo, onOpenFile, onAnswer }: {
+export const ChatItemView = memo(function ChatItemView({ item, repo, onOpenFile, onAnswer, onStopShell }: {
   item: ChatItem
   repo: string
   onOpenFile: (file: string) => void
   onAnswer: (requestId: string, optionId: string | null) => void
+  onStopShell: (shellId: string) => void
 }) {
   switch (item.kind) {
     case "user":
@@ -246,6 +307,8 @@ export const ChatItemView = memo(function ChatItemView({ item, repo, onOpenFile,
       return <ToolBlock item={item} repo={repo} onOpenFile={onOpenFile} />
     case "plan":
       return <PlanBlock item={item} />
+    case "shell":
+      return <ShellBlock item={item} onStop={onStopShell} />
     case "permission":
       return <PermissionBlock item={item} onAnswer={onAnswer} />
     case "turn_end":
