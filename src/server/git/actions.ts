@@ -1,6 +1,6 @@
 import "server-only"
 import type { ActionName, ActionPayload } from "@/lib/git/types"
-import { createRepoFile, removeFiles } from "../fs/files"
+import { createRepoDir, createRepoFile, moveRepoPaths, removeFiles, removeRepoPaths, renameRepoPath } from "../fs/files"
 import { HttpError } from "../http"
 import { resolveInRepo } from "../repo"
 import { createBranch, deleteBranch, switchBranch } from "./branches"
@@ -84,10 +84,32 @@ export const actions: Record<ActionName, ActionHandler> = {
     return `Created ${filePath}`
   },
 
+  async createDir(repo, payload) {
+    const dirPath = (payload.path || "").trim()
+    if (!dirPath) throw new HttpError(400, "Folder path is required")
+    await createRepoDir(repo, dirPath)
+    return `Created ${dirPath}/`
+  },
+
+  async rename(repo, payload) {
+    const from = (payload.path || "").trim()
+    const to = (payload.to || "").trim()
+    if (!from || !to) throw new HttpError(400, "Source and destination are required")
+    await renameRepoPath(repo, from, to)
+    return `Moved ${from} → ${to}`
+  },
+
+  async move(repo, payload) {
+    const files = requireFiles(payload)
+    const to = (payload.to ?? "").trim().replace(/\/+$/, "")
+    const moved = await moveRepoPaths(repo, files, to)
+    return `Moved ${moved.length === 1 ? moved[0] : plural(moved.length, "item")} to ${to ? `${to}/` : "the repository root"}`
+  },
+
   async delete(repo, payload) {
     const files = requireFiles(payload)
-    await removeFiles(files.map(f => resolveInRepo(repo, f)))
-    return `Deleted ${plural(files.length, "file")}`
+    await removeRepoPaths(repo, files)
+    return `Deleted ${files.length === 1 ? files[0] : plural(files.length, "item")}`
   },
 
   async discard(repo, payload) {

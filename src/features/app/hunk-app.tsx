@@ -8,13 +8,15 @@ import { useAgent } from "@/features/agent/use-agent"
 import { DeleteBranchDialog, SwitchBranchDialog } from "@/features/branches/branch-dialogs"
 import { BranchPicker } from "@/features/branches/branch-picker"
 import { localNameOf, useBranches } from "@/features/branches/use-branches"
-import { type BufferEntry, commitTabKey, makeTabId } from "@/features/buffer/buffer"
+import { type BufferEntry, type TabKey, commitTabKey, makeTabId } from "@/features/buffer/buffer"
 import { TabBar } from "@/features/buffer/tab-bar"
 import { useBuffer } from "@/features/buffer/use-buffer"
 import { useEditing } from "@/features/buffer/use-editing"
-import { CreateFileDialog, DeleteFileDialog, DiscardDialog, type DiscardRequest, useDialog } from "@/features/changes/dialogs"
+import { DeletePathDialog, type DeleteRequest, DiscardDialog, type DiscardRequest, useDialog } from "@/features/changes/dialogs"
 import { isDiscardAction, useGitActions } from "@/features/changes/use-git-actions"
 import { useGitStatus } from "@/features/changes/use-git-status"
+import { copyText } from "@/features/clipboard/use-copy-range"
+import { isBinaryFile } from "@/features/files/file-types"
 import { focusFindInput } from "@/features/find/highlight-segments"
 import { useFind } from "@/features/find/use-find"
 import type { CommitActionKind, CommitActions } from "@/features/history/commit-menu"
@@ -22,8 +24,11 @@ import { useHistory } from "@/features/history/use-history"
 import { QuickOpen } from "@/features/quick-open/quick-open"
 import { useQuickOpen } from "@/features/quick-open/use-quick-open"
 import { defaultRepo, selectionFromUrl, syncRepoToUrl } from "@/features/projects/projects"
+import { countFilesUnder, isUnder, moveTargets, topLevelPaths } from "@/features/sidebar/file-ops"
+import { MoveDialog } from "@/features/sidebar/move-dialog"
 import { SidebarContent, type SidebarTab } from "@/features/sidebar/sidebar-content"
 import { SidebarFrame } from "@/features/sidebar/sidebar-frame"
+import { useFileManager } from "@/features/sidebar/use-file-manager"
 import { useExpandedDirs, useSidebar } from "@/features/sidebar/use-sidebar"
 import { StashMenu } from "@/features/stash/stash-menu"
 import { useStash } from "@/features/stash/use-stash"
@@ -36,7 +41,7 @@ import { AddWorktreeDialog, type NewWorktree, RemoveWorktreeDialog } from "@/fea
 import { samePath } from "@/features/worktrees/worktrees"
 import { mentionableFiles } from "@/lib/acp/mentions"
 import { countConflicts, parseConflicts, resolveConflict } from "@/lib/git/parse-conflict"
-import { type ActionName, type ActionPayload, type Commit, PUSH_REJECTED, type Worktree } from "@/lib/git/types"
+import { type ActionName, type ActionPayload, type Commit, type GitFile, PUSH_REJECTED, type Worktree } from "@/lib/git/types"
 import { AppHeader } from "./app-header"
 import { useKeyboardShortcuts } from "./use-keyboard-shortcuts"
 
@@ -51,6 +56,15 @@ const HISTORY_ACTIONS = new Set<ActionName>(["commit", "fetch", "switchBranch", 
 // Actions that can fail half-way and leave the repo changed (stopped on
 // conflicts): the UI must catch up even though they "failed".
 const PARTIAL_ACTIONS = new Set<ActionName>(["pull", "revert", "cherryPick", "continueOperation", "abortOperation"])
+
+// The tab key for a file a tab followed to a new path: the side git status
+// now shows it on (a `git mv` stages the rename), else its raw content.
+function movedTabKey(file: string, entry: BufferEntry, fresh: GitFile[] | null): TabKey {
+  const raw = { file, staged: false, fromAll: true }
+  if (entry.fromAll || !fresh) return raw
+  const match = fresh.find(f => f.path === file && f.staged === entry.staged) ?? fresh.find(f => f.path === file)
+  return match ? { file, staged: match.staged, fromAll: false, oldPath: match.oldPath } : raw
+}
 
 export function HunkApp() {
   const { isDark, toggleTheme } = useTheme()
@@ -68,8 +82,8 @@ export function HunkApp() {
   const dirs = useExpandedDirs()
   const find = useFind(active, buffer.update)
   const [fileSearch, setFileSearch] = useState("")
-  const [createOpen, setCreateOpen] = useState(false)
-  const deleteDialog = useDialog<string>()
+  const deleteDialog = useDialog<DeleteRequest>()
+  const moveDialog = useDialog<string[]>()
   const discardDialog = useDialog<DiscardRequest>()
   const [addWorktreeOpen, setAddWorktreeOpen] = useState(false)
   const removeWorktreeDialog = useDialog<Worktree>()
@@ -132,14 +146,27 @@ export function HunkApp() {
     buffer.open(commitTabKey(sha, file))
   }, [buffer])
 
-  const revealHistory = useCallback(() => {
-    setSidebarTab("history")
+  // Switches the sidebar to `tab` and makes sure it's on screen.
+  const revealSidebar = useCallback((tab: SidebarTab) => {
+    setSidebarTab(tab)
     if (window.matchMedia("(min-width: 768px)").matches) {
       if (!sidebar.open) sidebar.toggle()
     } else {
       sidebar.setMobileOpen(true)
     }
   }, [sidebar])
+  const revealHistory = useCallback(() => revealSidebar("history"), [revealSidebar])
+
+  // A file just created from the sidebar: open it straight in the editor.
+  const openNewFile = useCallback((file: string) => {
+    dirs.expandAncestors(file)
+    const key = { file, staged: false, fromAll: true }
+    buffer.open(key)
+    if (!isBinaryFile(file)) {
+      buffer.update(makeTabId(repoPath, key), { editMode: true, editContent: "", dirty: false, viewMode: "split", mdRender: false })
+    }
+    sidebar.setMobileOpen(false)
+  }, [dirs, buffer, repoPath, sidebar])
 
   // Scopes the History tab to one file and brings it into view.
   const showHistory = useCallback((file: string) => {
@@ -181,17 +208,24 @@ export function HunkApp() {
     }
     // Staging/unstaging the active file flips which side of it we're looking
     // at — keep the tab and update its staged flag in place.
-    if (fresh && active && !discard && (action === "addAll" || action === "unstageAll" || touchesActive)) {
+    if (fresh && active && !discard && action !== "delete" && action !== "move" && (action === "addAll" || action === "unstageAll" || touchesActive)) {
       const staged = fresh.some(f => f.path === active.file && f.staged)
       const oldPath = fresh.find(f => f.path === active.file && f.staged === staged)?.oldPath
       buffer.update(active.id, { staged, oldPath })
       void buffer.fetchEntry({ ...active, staged, oldPath })
     }
-    if (action === "create" || action === "delete" || discard) {
-      void status.loadAllFiles()
-      if (action === "create" && payload?.path) openFromTree(payload.path)
+    // (loadStatus above also reloaded All Files.)
+    if (action === "create" && payload?.path) openNewFile(payload.path)
+    // Open tabs follow moved files; the tree shows where they went.
+    const moved: [string, string][] = action === "rename" && payload?.path && payload.to
+      ? [[payload.path, payload.to]]
+      : action === "move" && payload?.files ? moveTargets(payload.files, payload.to ?? "") : []
+    for (const [from, to] of moved) {
+      buffer.remap(from, to, (file, entry) => movedTabKey(file, entry, fresh))
+      dirs.expandAncestors(to)
+      if (dirs.expanded.has(from)) dirs.expandAncestors(`${to}/-`)
     }
-  }, [status, active, buffer, openFromTree, worktrees, branches, stash, history])
+  }, [status, active, buffer, openNewFile, worktrees, branches, stash, history, dirs])
 
   // A failed action may still have changed the repo (conflicts); a rejected
   // push offers to force it.
@@ -207,6 +241,61 @@ export function HunkApp() {
   }, [branches, history, status, active, buffer])
 
   const { busyAction, actionResult, setActionResult, runAction } = useGitActions(repoPath, afterAction, afterFailure)
+
+  // --- File manager (sidebar Files tab) ---------------------------------------
+
+  const expandDir = useCallback((dir: string) => {
+    if (dir) dirs.expandAncestors(`${dir}/-`)
+  }, [dirs])
+  const fileManager = useFileManager({
+    entries: status.allFiles,
+    activeFile: active && !active.commit ? active.file : undefined,
+    runAction,
+    expandDir,
+  })
+
+  const requestDelete = (paths: string[]) => {
+    const top = topLevelPaths(paths)
+    const dirs = new Set(status.allFiles.filter(e => e.type === "dir").map(e => e.path))
+    const dirCount = top.filter(p => dirs.has(p)).length
+    const fileCount = top.reduce((n, p) => n + (dirs.has(p) ? countFilesUnder(status.allFiles, p) : 1), 0)
+    const changed = new Set(status.files.filter(f => top.some(p => isUnder(f.path, p))).map(f => f.path))
+    deleteDialog.show({ paths: top, dirCount, fileCount, changedCount: changed.size })
+  }
+
+  const confirmDelete = async () => {
+    const request = deleteDialog.value
+    if (!request) return
+    deleteDialog.setOpen(false)
+    if (!(await runAction("delete", { files: request.paths }))) return
+    for (const p of request.paths) {
+      buffer.closeUnder(p)
+      fileManager.forget(p)
+    }
+  }
+
+  const moveFolders = useMemo(() => status.allFiles.filter(e => e.type === "dir").map(e => e.path), [status.allFiles])
+
+  const confirmMove = async (paths: string[], dest: string) => {
+    moveDialog.setOpen(false)
+    await fileManager.moveInto(paths, dest)
+  }
+
+  // Shows a file in the Files tab, scrolled into view.
+  const revealInFiles = (path: string) => {
+    revealSidebar("all")
+    dirs.expandAncestors(path)
+    setTimeout(() => {
+      const row = document.querySelector<HTMLElement>(`[data-path="${CSS.escape(path)}"]`)
+      row?.scrollIntoView({ block: "nearest" })
+      row?.focus()
+    }, 50)
+  }
+
+  const newFile = () => {
+    revealSidebar("all")
+    fileManager.startCreate("file")
+  }
 
   // --- Agent -----------------------------------------------------------------
 
@@ -327,15 +416,6 @@ export function HunkApp() {
     void runAction("abortOperation")
   }
 
-  const confirmDelete = async () => {
-    const file = deleteDialog.value
-    if (!file) return
-    deleteDialog.setOpen(false)
-    const activeId = active?.file === file ? active.id : null
-    await runAction("delete", { files: [file] })
-    if (activeId) buffer.close(activeId)
-  }
-
   // --- Tabs, find, repo switching ------------------------------------------
 
   const requestClose = useCallback((entry: BufferEntry) => {
@@ -409,6 +489,7 @@ export function HunkApp() {
     save: editing.saveFile,
     quickOpenOpen: quickOpen.open,
     openQuickOpen: quickOpen.show,
+    newFile,
   })
 
   const viewerHandlers: ViewerHandlers = {
@@ -427,7 +508,7 @@ export function HunkApp() {
       buffer.update(entry.id, { viewMode: mode })
       if (mode === "raw" && (!entry.raw || entry.rawError)) void buffer.fetchRaw(entry)
     },
-    delete: deleteDialog.show,
+    delete: file => requestDelete([file]),
     toggleFind: () => (active?.findOpen ? find.close() : openFind()),
     toggleBlame: entry => {
       const blame = entry.viewMode !== "blame"
@@ -467,6 +548,21 @@ export function HunkApp() {
       onOpenChange={openChange}
       onOpenTreeFile={openFromTree}
       onNavigate={onNavigate}
+      fileManager={fileManager}
+      menu={{
+        newItem: fileManager.startCreate,
+        rename: fileManager.startRename,
+        delete: requestDelete,
+        move: moveDialog.show,
+        copyPath: (paths, absolute) => void copyText(paths.map(p => (absolute ? `${repoPath}/${p}` : p)).join("\n")),
+        showHistory,
+        reveal: revealInFiles,
+        stage: (files, staged) => void runAction(staged ? "unstage" : "add", { files }),
+        discard: requestDiscard,
+        toggleDir: dirs.toggle,
+        collapseAll: dirs.reset,
+        refresh: () => void status.loadStatus(),
+      }}
       tree={{
         activeFile: active?.file,
         expanded: dirs.expanded,
@@ -474,8 +570,7 @@ export function HunkApp() {
         onToggleDir: dirs.toggle,
         onStage: (files, staged) => runAction(staged ? "unstage" : "add", { files }),
         onDiscard: requestDiscard,
-        onDelete: deleteDialog.show,
-        onShowHistory: showHistory,
+        onDelete: requestDelete,
       }}
     />
   )
@@ -532,7 +627,6 @@ export function HunkApp() {
           agentOpen={agentPanel.visible}
           onToggleAgent={agentPanel.toggle}
           onOpenMobileSidebar={() => sidebar.setMobileOpen(true)}
-          onNewFile={() => setCreateOpen(true)}
           onQuickOpen={quickOpen.show}
           onDiscardAll={() => discardDialog.show({ action: "discardAll" })}
           onProjectChange={dir => switchRepo(dir, dir)}
@@ -600,16 +694,19 @@ export function HunkApp() {
           changed={status.files}
           onOpen={openFromQuickOpen}
         />
-        <CreateFileDialog
-          open={createOpen}
-          onOpenChange={setCreateOpen}
-          busy={busyAction === "create"}
-          onCreate={async path => { await runAction("create", { path }) }}
+        <MoveDialog
+          open={moveDialog.open}
+          onOpenChange={moveDialog.setOpen}
+          paths={moveDialog.value}
+          folders={moveFolders}
+          existing={fileManager.existing}
+          busy={busyAction === "move"}
+          onMove={confirmMove}
         />
-        <DeleteFileDialog
+        <DeletePathDialog
           open={deleteDialog.open}
           onOpenChange={deleteDialog.setOpen}
-          file={deleteDialog.value}
+          request={deleteDialog.value}
           busy={busyAction === "delete"}
           onConfirm={confirmDelete}
         />

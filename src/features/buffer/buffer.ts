@@ -1,3 +1,4 @@
+import { isUnder, remapPath } from "@/features/sidebar/file-ops"
 import type { BlameResponse, CommitResponse } from "@/lib/git/types"
 
 // The buffer is the list of open tabs. Each entry holds everything the viewer
@@ -115,6 +116,11 @@ export type BufferAction =
   | { type: "close"; id: string }
   | { type: "update"; id: string; patch: Partial<BufferEntry> }
   | { type: "reset"; state: BufferState }
+  // A file/dir moved from `from` to `to`: tabs on or under it follow, with
+  // the key `keyFor` picks for the new path (its staged side may differ).
+  | { type: "remap"; repo: string; from: string; to: string; keyFor: (file: string, entry: BufferEntry) => TabKey }
+  // A file/dir was deleted: close every tab on or under it.
+  | { type: "closeUnder"; path: string }
 
 export const emptyBuffer: BufferState = { entries: [], activeId: null }
 
@@ -159,6 +165,43 @@ export function bufferReducer(state: BufferState, action: BufferAction): BufferS
 
     case "reset":
       return action.state
+
+    case "remap": {
+      const ids = new Map<string, string>()
+      const seen = new Set<string>()
+      const entries: BufferEntry[] = []
+      for (const b of state.entries) {
+        const file = b.commit ? null : remapPath(b.file, action.from, action.to)
+        let next = b
+        if (file !== null) {
+          const key = action.keyFor(file, b)
+          next = {
+            ...b,
+            id: makeTabId(action.repo, key),
+            file: key.file,
+            staged: key.staged,
+            fromAll: key.fromAll,
+            oldPath: key.oldPath,
+            // Content is re-fetched for the new path.
+            diff: "",
+            blame: null,
+          }
+          ids.set(b.id, next.id)
+        }
+        // Two tabs can collapse into one (diff + raw of the same file).
+        if (seen.has(next.id)) continue
+        seen.add(next.id)
+        entries.push(next)
+      }
+      if (ids.size === 0) return state
+      const activeId = state.activeId ? ids.get(state.activeId) ?? state.activeId : null
+      return { entries, activeId }
+    }
+
+    case "closeUnder":
+      return state.entries
+        .filter(b => !b.commit && isUnder(b.file, action.path))
+        .reduce((s, b) => bufferReducer(s, { type: "close", id: b.id }), state)
   }
 }
 

@@ -42,7 +42,8 @@ export function SidebarFrame({ sidebar, render }: {
       )}
 
       <Sheet open={sidebar.mobileOpen} onOpenChange={sidebar.setMobileOpen}>
-        <SheetContent side="left" className="w-80 gap-0 p-0 sm:max-w-xs">
+        {/* Radix focuses the first input on open, which pops the mobile keyboard. */}
+        <SheetContent side="left" className="w-80 gap-0 p-0 sm:max-w-xs" onOpenAutoFocus={e => e.preventDefault()}>
           <SheetHeader className="border-b border-border py-3">
             <SheetTitle className="flex items-center gap-2 text-sm">
               <Folder size={14} className="text-muted-foreground" />

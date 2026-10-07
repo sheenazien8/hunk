@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 // Copies text, falling back to a hidden textarea + execCommand in
 // contexts where the async Clipboard API is unavailable (non-secure origin).
-async function copyText(text: string) {
+export async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text)
   } catch {

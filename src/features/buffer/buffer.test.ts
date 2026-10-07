@@ -71,6 +71,42 @@ describe("bufferReducer", () => {
   })
 })
 
+describe("remap / closeUnder", () => {
+  const keepSide = (file: string, b: ReturnType<typeof entry>) => ({ file, staged: b.staged, fromAll: b.fromAll })
+
+  it("moves tabs on and under a renamed path, keeping the active one", () => {
+    let s = openAll(["src/a.ts", "src/lib/b.ts", "srcx/c.ts"])
+    s = bufferReducer(s, { type: "open", entry: newEntry(repo, commitTabKey("abc")) })
+    s = bufferReducer(s, { type: "activate", id: entry("src/lib/b.ts").id })
+    s = bufferReducer(s, { type: "update", id: entry("src/lib/b.ts").id, patch: { dirty: true, editContent: "x" } })
+    s = bufferReducer(s, { type: "remap", repo, from: "src", to: "app", keyFor: keepSide })
+    expect(s.entries.map(e => e.file)).toEqual(["app/a.ts", "app/lib/b.ts", "srcx/c.ts", ""])
+    expect(s.activeId).toBe(entry("app/lib/b.ts").id)
+    expect(s.entries[1]).toMatchObject({ dirty: true, editContent: "x" })
+  })
+
+  it("can change the tab key and merges duplicates", () => {
+    let s = bufferReducer(emptyBuffer, { type: "open", entry: entry("a.ts") })
+    s = bufferReducer(s, { type: "open", entry: newEntry(repo, { file: "a.ts", staged: false, fromAll: true }) })
+    s = bufferReducer(s, { type: "remap", repo, from: "a.ts", to: "b.ts", keyFor: file => ({ file, staged: true, fromAll: false }) })
+    expect(s.entries).toHaveLength(1)
+    expect(s.entries[0]).toMatchObject({ file: "b.ts", staged: true, id: `${repo}::b.ts::s::d` })
+    expect(s.activeId).toBe(s.entries[0].id)
+  })
+
+  it("leaves the state alone when nothing matches", () => {
+    const s = openAll(["a.ts"])
+    expect(bufferReducer(s, { type: "remap", repo, from: "x", to: "y", keyFor: keepSide })).toBe(s)
+  })
+
+  it("closes tabs under a deleted folder", () => {
+    let s = openAll(["d/a.ts", "keep.ts", "d/e/b.ts"])
+    s = bufferReducer(s, { type: "closeUnder", path: "d" })
+    expect(s.entries.map(e => e.file)).toEqual(["keep.ts"])
+    expect(s.activeId).toBe(entry("keep.ts").id)
+  })
+})
+
 describe("persistence", () => {
   beforeEach(() => {
     const store = new Map<string, string>()

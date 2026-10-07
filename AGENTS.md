@@ -52,7 +52,7 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── git/stash.ts            # listStashes, stash/stashPop/stashApply/stashDrop actions
 │   ├── git/remote.ts           # fetch / pull (ff-only | rebase, autostash) / push (--force-with-lease)
 │   ├── git/commit-tools.ts     # amend, undoCommit, revert, cherryPick, continue/abortOperation
-│   ├── fs/files.ts             # read/write/create/remove repo files (all path-guarded)
+│   ├── fs/files.ts             # read/write/create (file|dir)/rename/remove repo paths (path- and .git-guarded)
 │   ├── fs/walk.ts              # All Files walker + ignore-pattern matching
 │   └── acp/                    # agent chat: config.ts (acp.config.json), agent-process.ts (spawn +
 │                               #   SDK ClientSideConnection), session.ts (event log, permissions),
@@ -69,6 +69,7 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │                               #   line-diff.ts (ACP diff → unified diff), permissions.ts, mentions.ts (@file parsing/ranking),
 │                               #   agent-config.ts (settings → toolbar controls, context usage), shell-prefix.ts (!/!! parsing),
 │                               #   tail-lines.ts (last-150-lines output buffer)
+│   ├── repo-paths.ts           # topLevelPaths() — shared by server/fs and the sidebar
 │   ├── time-ago.ts             # compact relative times ("5m", "2d")
 │   ├── api-client.ts           # `api.*` typed fetchers — the ONLY place that calls /api/git/* and /api/acp/*
 │   ├── auth.ts                 # JWT sign/verify, cookies, credentials from env
@@ -80,7 +81,9 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   │                           #   (fetching, in-flight guard), use-editing.ts, tab-bar.tsx
 │   ├── changes/                # use-git-status.ts, use-git-actions.ts, dialogs.tsx
 │   ├── sidebar/                # tree.ts (pure), use-sidebar.ts (+useExpandedDirs), file-tree.tsx,
-│   │                           #   sidebar-content.tsx, sidebar-frame.tsx (desktop aside + mobile sheet)
+│   │                           #   sidebar-content.tsx (+Files toolbar), sidebar-frame.tsx (desktop aside + mobile sheet),
+│   │                           #   file manager: file-ops.ts (pure), use-file-manager.ts, inline-name-input.tsx,
+│   │                           #   tree-context-menu.tsx, move-dialog.tsx, selection.ts (pure multi-select)
 │   ├── viewer/                 # viewer-panel.tsx (toolbar), file-viewer.tsx (view switch),
 │   │                           #   diff/code/markdown/edit views, numbered-code.tsx, highlight-code.ts
 │   ├── find/                   # find.ts (pure engine), use-find.ts, find-bar.tsx, highlight-segments.tsx
@@ -103,7 +106,7 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │                               #   (@-mentions, action buttons, resizable), config-bar.tsx (model/thinking/mode…),
 │                               #   session-picker.tsx + use-session-list.ts (paged popover), chat-items.tsx
 ├── src/hooks/use-popover.ts     # open state + outside-click/Escape for hand-rolled popovers
-├── src/components/ui/          # shadcn/ui (badge, button, card, dialog, input, scroll-area,
+├── src/components/ui/          # shadcn/ui (badge, button, card, context-menu, dialog, input, scroll-area,
 │                               #   separator, sheet, skeleton, tabs, tooltip)
 ├── src/**/*.test.ts, test/     # Vitest; test/git-repo.ts creates throwaway git repos
 ├── projects.json               # Project list (name + dir [+ ignore]) — gitignored; imported at build time
@@ -171,6 +174,13 @@ Vitest (`vitest.config.mts`, node env). Unit tests sit next to the code (`*.test
     *   Revert/cherry-pick of a merge use `-m 1`. A pick that would be empty is aborted and reported (409). Conflicts leave the operation in progress: the header banner offers Continue (`GIT_EDITOR=true`, refuses while unmerged paths remain) / Abort. Those "failed" actions are in `PARTIAL_ACTIONS` (`hunk-app.tsx`), which refreshes status/history on failure too.
     *   `undoCommit` = `reset --soft HEAD~1`, guarded by the sha the UI saw (409 if HEAD moved); refused on the root commit. Amend with an empty message keeps HEAD's (`--no-edit`). Both confirm first when HEAD is already on the upstream.
     *   Cherry-pick sources: a branch's history (branch picker → History icon sets `history.ref`); the commit tab offers it unless the commit is HEAD or in the current branch's loaded history.
+*   **Sidebar file manager** (plan `docs/plan/28-sidebar-file-manager.md`): all file management lives in the sidebar — the header has no New File button. Files tab toolbar (New File / New Folder / Collapse All / Refresh), VS Code-style inline create/rename rows, row hover buttons (always visible on `pointer-coarse`), one right-click menu per tree (`TreeContextMenu`; the row records itself as the target on `contextmenu`, the wrapper resets it to null first via capture), row keys `F2` / `Del` / `a` / `Shift+A`, drag-to-move (desktop), `Ctrl/Cmd+Alt+N` (matched on `e.code`). New items go in `useFileManager().target`: the clicked folder, else the active file's folder, else the root (click empty space). Actions: `create` (makes parent dirs), `createDir`, `rename` (`path` → `to`; `git mv` when anything under it is tracked, else `fs.rename`), `delete` (recursive). All refuse `.git`. Tabs follow renames (`buffer` `remap`, new key from fresh status) and close on delete (`closeUnder`); a created text file opens in edit mode. The shadcn CLI resolves the `utils` alias to an npm package called `cn` — fix the import to `@/lib/utils` and don't keep that dependency.
+*   **Multi-select** (plan `docs/plan/29-sidebar-multi-select-actions.md`), in all three trees:
+    *   **Selecting**: `Ctrl/Cmd+click` toggles (a first toggle includes the previously clicked row), `Shift+click` / `Shift+↑↓` select ranges, `Ctrl/Cmd+A` selects all visible rows, `Esc` or clicking empty space clears. The menu's "Add to Selection" builds one on touch screens.
+    *   **State** lives in `sidebar-content.tsx` (pure transitions in `selection.ts`) and is pruned every render against the tree's paths, so moved, deleted or staged rows drop out without explicit clears. A plain click never creates a one-item selection.
+    *   **Acting**: a selection bar appears above the tree. Right-clicking a selected row opens the bulk menu, and right-clicking any other row clears the selection. `Del` and drag act on the whole selection.
+    *   Bulk Stage/Discard expand selected folders to the changed files under them.
+    *   **Server**: action `move` (`files` + `to` folder) skips items already there and validates everything before moving anything. The client mirrors it with `validateMoveTarget` / `moveTargets`, and the latter drives the tab remap. Drag-and-drop always uses `move`; F2 rename uses `rename`.
 *   **Quick Open** (`features/quick-open/`, plan `docs/plan/25-quick-open-file-picker.md`): Ctrl/Cmd+P (also the header search button) fuzzy-finds over `repoFiles` (All Files minus git-ignored) ∪ changed files; empty query = open tabs then changed files. It's separate from the sidebar search input, which stays a tree/History filter. While it's open the global shortcut handler ignores keys. `path:42` opens the file raw (All Files tab) with `BufferEntry.gotoLine`, which `NumberedCode` scrolls to/highlights (CodeView only).
 *   **Dark mode**: persisted in `localStorage` under key `hunk-dark`. The `.dark` class is applied **pre-hydration** by an inline script in `layout.tsx` (localStorage → falls back to `prefers-color-scheme`), so there is no theme flash. `useTheme()` (`features/theme/theme.ts`) reads it via `useSyncExternalStore` and writes `localStorage` + toggles the class. Keep the key in sync with `layout.tsx`.
 *   **React compiler lint** (`react-hooks/refs`): don't return a ref inside an object you then read during render — destructure it (see `useFullscreen` in `viewer-panel.tsx`).

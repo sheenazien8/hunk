@@ -14,6 +14,7 @@ interface Shortcuts {
   // Quick Open: while it's open it handles its own keys.
   quickOpenOpen: boolean
   openQuickOpen: () => void
+  newFile: () => void
 }
 
 // Global shortcuts:
@@ -22,6 +23,7 @@ interface Shortcuts {
 //   Ctrl/Cmd+F        find in file (not while editing)
 //   Ctrl/Cmd+B        toggle the sidebar (VS Code muscle memory)
 //   Ctrl/Cmd+I        toggle the agent panel
+//   Ctrl/Cmd+Alt+N    new file (in the sidebar's target folder)
 //   Ctrl/Cmd+S        save while editing (or resolving conflicts)
 //   Ctrl/Cmd+W        close the active tab
 //   Ctrl/Cmd+(Shift+)Tab, Ctrl/Cmd+PageUp/PageDown   cycle tabs
@@ -34,7 +36,7 @@ export function useKeyboardShortcuts(shortcuts: Shortcuts) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const { active, entries, activate, requestClose, openFind, closeFind, toggleSidebar, toggleAgent, save, quickOpenOpen, openQuickOpen } = ref.current
+      const { active, entries, activate, requestClose, openFind, closeFind, toggleSidebar, toggleAgent, save, quickOpenOpen, openQuickOpen, newFile } = ref.current
       if (quickOpenOpen) return
       if (e.key === "Escape") {
         if (active?.findOpen) {
@@ -52,6 +54,10 @@ export function useKeyboardShortcuts(shortcuts: Shortcuts) {
       } else if (key === "f" && active && !active.editMode && !active.commit) {
         e.preventDefault()
         openFind()
+      } else if (e.code === "KeyN" && e.altKey && !e.shiftKey) {
+        // e.code: on macOS Option+N types a dead key instead of "n".
+        e.preventDefault()
+        newFile()
       } else if (key === "b") {
         e.preventDefault()
         toggleSidebar()

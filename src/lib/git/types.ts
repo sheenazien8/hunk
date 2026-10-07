@@ -188,6 +188,9 @@ export const ACTION_NAMES = [
   "commit",
   "push",
   "create",
+  "createDir",
+  "rename",
+  "move",
   "delete",
   "discard",
   "discardAll",
@@ -218,7 +221,10 @@ export interface ActionPayload {
   // Commit message, or the stash message.
   message?: string
   // Repo-relative file path, or the absolute worktree path for add/removeWorktree.
+  // rename: the path to move.
   path?: string
+  // rename: the destination path. move: the destination folder ("" = root).
+  to?: string
   // addWorktree: branch to check out, creating it from `base` when `newBranch`.
   // switchBranch: local or remote ("origin/x") branch; createBranch/deleteBranch: local branch.
   branch?: string

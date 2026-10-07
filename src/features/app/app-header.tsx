@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react"
-import { Bot, Check, FilePlus, Folder, FolderGit2, FolderMinus, FolderPlus, GitBranch, Menu, Moon, PanelLeft, RefreshCw, RotateCcw, Search, Sun, TriangleAlert, Upload, X } from "lucide-react"
+import { Bot, Check, Folder, FolderGit2, FolderMinus, FolderPlus, GitBranch, Menu, Moon, PanelLeft, RefreshCw, RotateCcw, Search, Sun, TriangleAlert, Upload, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { ActionResult } from "@/features/changes/use-git-actions"
@@ -53,7 +53,7 @@ function OperationBanner({ operation, busyAction, onContinue, onAbort }: {
 const inputCls = "rounded-md border border-input bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
 
 // Title bar (sidebar toggles, branch + stash controls, last action result,
-// theme, new file, discard all) plus the project + worktree selectors /
+// theme, discard all) plus the project + worktree selectors /
 // refresh / commit / push row.
 export function AppHeader(props: {
   // Branch picker and stash menu.
@@ -71,7 +71,6 @@ export function AppHeader(props: {
   agentOpen: boolean
   onToggleAgent: () => void
   onOpenMobileSidebar: () => void
-  onNewFile: () => void
   onQuickOpen: () => void
   onDiscardAll: () => void
   onProjectChange: (project: string) => void
@@ -145,11 +144,6 @@ export function AppHeader(props: {
           {isDark ? <Sun size={14} /> : <Moon size={14} />}
           <span className="hidden sm:inline">{isDark ? "Light" : "Dark"}</span>
         </Button>
-        <IconTip tip="New File">
-          <Button variant="outline" size="icon" className="h-9 w-9" onClick={props.onNewFile}>
-            <FilePlus size={16} />
-          </Button>
-        </IconTip>
         <IconTip tip="Discard all changes">
           <Button
             variant="outline"
