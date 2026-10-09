@@ -62,9 +62,9 @@ export class AgentProcess {
     return !this.exited
   }
 
-  static async start(agent: AgentConfig, repo: string, handlers: AgentHandlers): Promise<AgentProcess> {
+  static async start(agent: AgentConfig, repo: string, handlers: AgentHandlers, hunkEnv: Record<string, string> = {}): Promise<AgentProcess> {
     const [command, ...args] = agent.command
-    const child = spawn(command, args, { cwd: repo, env: agentEnv(agent.env), stdio: ["pipe", "pipe", "pipe"] })
+    const child = spawn(command, args, { cwd: repo, env: agentEnv({ ...hunkEnv, ...agent.env }), stdio: ["pipe", "pipe", "pipe"] })
     children.add(child)
     const stream = ndJsonStream(
       Writable.toWeb(child.stdin!) as WritableStream<Uint8Array>,
