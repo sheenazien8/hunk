@@ -106,6 +106,30 @@ export function useAgent(repo: string, enabled: boolean, onFilesChanged: () => v
     }
   }, [repo, agentId, select])
 
+  const startTask = useCallback(async (text: string, files: string[] = []) => {
+    setPending("open")
+    setError("")
+    try {
+      let agent = agentId
+      if (!agent) {
+        const list = agents.length > 0 ? agents : await api.acp.agents()
+        if (agents.length === 0) setAgents(list)
+        agent = list.find(a => a.id === readStorage(AGENT_KEY))?.id ?? list[0]?.id ?? ""
+        if (!agent) throw new Error("No agent is configured")
+        setAgentId(agent)
+      }
+      const id = await api.acp.open(repo, agent)
+      await api.acp.action(id, { action: "prompt", text, files })
+      select(id)
+      return true
+    } catch (e) {
+      setError(errorText(e))
+      return false
+    } finally {
+      setPending(null)
+    }
+  }, [repo, agentId, agents, select])
+
   // The server returns a live session as is and asks the agent to load
   // any other one (so this also revives a session whose agent exited).
   const resume = useCallback((id: string) => void openSession(id), [openSession])
@@ -221,6 +245,7 @@ export function useAgent(repo: string, enabled: boolean, onFilesChanged: () => v
     clearError: () => setError(""),
     selectAgent,
     newSession: () => openSession(),
+    startTask,
     resume,
     send,
     cancel: () => act({ action: "cancel" }),
