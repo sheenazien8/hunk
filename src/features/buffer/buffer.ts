@@ -114,6 +114,8 @@ export type BufferAction =
   | { type: "open"; entry: BufferEntry }
   | { type: "activate"; id: string }
   | { type: "close"; id: string }
+  // Close several tabs at once (Close All / Others / to the Right).
+  | { type: "closeMany"; ids: string[] }
   | { type: "update"; id: string; patch: Partial<BufferEntry> }
   | { type: "reset"; state: BufferState }
   // A file/dir moved from `from` to `to`: tabs on or under it follow, with
@@ -153,6 +155,21 @@ export function bufferReducer(state: BufferState, action: BufferAction): BufferS
         activeId = removedIdx === -1 || entries.length === 0
           ? null
           : entries[Math.min(removedIdx, entries.length - 1)].id
+      }
+      return { entries, activeId }
+    }
+
+    case "closeMany": {
+      const drop = new Set(action.ids)
+      const entries = state.entries.filter(b => !drop.has(b.id))
+      if (entries.length === state.entries.length) return state
+      let activeId = state.activeId
+      // The active tab went too: activate the first survivor to its right,
+      // else the last one left.
+      if (activeId && drop.has(activeId)) {
+        const from = state.entries.findIndex(b => b.id === activeId)
+        const right = state.entries.slice(from + 1).find(b => !drop.has(b.id))
+        activeId = right?.id ?? entries.at(-1)?.id ?? null
       }
       return { entries, activeId }
     }

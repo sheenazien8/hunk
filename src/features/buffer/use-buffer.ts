@@ -42,6 +42,7 @@ export function useBuffer(repoPath: string, statusLoading: boolean) {
 
   const activate = useCallback((id: string) => dispatch({ type: "activate", id }), [])
   const close = useCallback((id: string) => dispatch({ type: "close", id }), [])
+  const closeMany = useCallback((ids: string[]) => dispatch({ type: "closeMany", ids }), [])
   // A file/dir was moved or deleted: tabs follow it or close. A moved active
   // tab gets a new id, so the active-tab effect below re-fetches it.
   const remap = useCallback((from: string, to: string, keyFor: (file: string, entry: BufferEntry) => TabKey) => {
@@ -167,6 +168,7 @@ export function useBuffer(repoPath: string, statusLoading: boolean) {
     open,
     activate,
     close,
+    closeMany,
     remap,
     closeUnder,
     refresh,

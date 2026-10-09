@@ -72,6 +72,26 @@ describe("bufferReducer", () => {
   })
 })
 
+describe("closeMany", () => {
+  it("closes the given tabs and keeps the active one when it survives", () => {
+    const s = bufferReducer(openAll(["a", "b", "c", "d"]), { type: "activate", id: entry("b").id })
+    const next = bufferReducer(s, { type: "closeMany", ids: [entry("a").id, entry("c").id] })
+    expect(next.entries.map(e => e.file)).toEqual(["b", "d"])
+    expect(next.activeId).toBe(entry("b").id)
+  })
+
+  it("moves to the next survivor on the right, else the last one", () => {
+    const s = bufferReducer(openAll(["a", "b", "c", "d"]), { type: "activate", id: entry("b").id })
+    expect(bufferReducer(s, { type: "closeMany", ids: [entry("b").id, entry("c").id] }).activeId).toBe(entry("d").id)
+    expect(bufferReducer(s, { type: "closeMany", ids: [entry("b").id, entry("c").id, entry("d").id] }).activeId).toBe(entry("a").id)
+  })
+
+  it("empties the buffer on close all", () => {
+    const s = openAll(["a", "b"])
+    expect(bufferReducer(s, { type: "closeMany", ids: s.entries.map(e => e.id) })).toEqual(emptyBuffer)
+  })
+})
+
 describe("remap / closeUnder", () => {
   const keepSide = (file: string, b: ReturnType<typeof entry>) => ({ file, staged: b.staged, fromAll: b.fromAll })
 

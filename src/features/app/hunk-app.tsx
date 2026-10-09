@@ -462,6 +462,18 @@ export function HunkApp() {
     buffer.close(entry.id)
   }, [buffer, askConfirm])
 
+  // Close All / Others / to the Right: one confirmation for all unsaved tabs.
+  const requestCloseMany = useCallback(async (entries: BufferEntry[]) => {
+    const dirty = entries.filter(e => e.dirty).length
+    if (dirty > 0 && !(await askConfirm({
+      title: "Discard unsaved changes?",
+      description: `${dirty} of the tabs being closed ${dirty === 1 ? "has" : "have"} unsaved changes. Close without saving?`,
+      confirmLabel: "Discard & close",
+      destructive: true,
+    }))) return
+    buffer.closeMany(entries.map(e => e.id))
+  }, [buffer, askConfirm])
+
   const openFind = useCallback(() => {
     if (!active || active.commit || conflicted) return
     find.open()
@@ -706,6 +718,7 @@ export function HunkApp() {
               onActivate={buffer.activate}
               onRefresh={buffer.refresh}
               onClose={requestClose}
+              onCloseMany={entries => void requestCloseMany(entries)}
             />
             <ViewerPanel
               active={active}
