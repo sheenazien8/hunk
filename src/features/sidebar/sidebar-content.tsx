@@ -87,6 +87,39 @@ function FilesToolbar({ files, busy, menu }: { files: FileManager; busy: boolean
   )
 }
 
+// Changes / Staged tab header: file count plus the whole-tree actions
+// (Stage All + Discard All, or Unstage All). Stage All skips conflicted
+// files — staging one marks it resolved, which the conflict view asks about.
+function ChangesToolbar({ files, staged, busy, menu, onDiscardAll }: {
+  files: GitFile[]
+  staged: boolean
+  busy: boolean
+  menu: Omit<TreeMenuActions, "open">
+  onDiscardAll?: () => void
+}) {
+  if (files.length === 0) return null
+  const n = files.length
+  const stageable = files.filter(f => f.status !== "conflicted").map(f => f.path)
+  return (
+    <div className="mb-1 flex items-center gap-0.5 border-b border-border pb-1 pl-2">
+      <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+        {n} {staged ? "staged" : "changed"} file{n === 1 ? "" : "s"}
+      </span>
+      <ToolbarButton title={staged ? "Unstage All" : "Stage All"} disabled={busy || stageable.length === 0} onClick={() => menu.stage(stageable, staged)}>
+        {staged ? <Minus size={14} /> : <Plus size={14} />}
+      </ToolbarButton>
+      {onDiscardAll && (
+        <ToolbarButton title="Discard All Changes" disabled={busy} onClick={onDiscardAll}>
+          <RotateCcw size={14} className="text-destructive" />
+        </ToolbarButton>
+      )}
+      <ToolbarButton title="Refresh" onClick={menu.refresh}>
+        <RefreshCw size={14} />
+      </ToolbarButton>
+    </div>
+  )
+}
+
 // Shown above a tree while rows are selected: the count, bulk actions, clear.
 function SelectionBar({ mode, count, fileCount, busy, actions, onClear }: {
   mode: TreeMode
@@ -134,7 +167,7 @@ export type SidebarTab = TreeMode | "history"
 
 // Sidebar body: file search plus the Changes / Staged / All Files / History
 // tabs. `onNavigate` runs after a file or commit is opened (closes the mobile sheet).
-export function SidebarContent({ tab, onTabChange, files, allFiles, loading, search, onSearchChange, tree, fileManager, menu, onOpenChange, onOpenTreeFile, history, activeCommit, commitActions, onOpenCommit, onNavigate }: {
+export function SidebarContent({ tab, onTabChange, files, allFiles, loading, search, onSearchChange, tree, fileManager, menu, onDiscardAll, onOpenChange, onOpenTreeFile, history, activeCommit, commitActions, onOpenCommit, onNavigate }: {
   // Controlled so "Show history" can switch to the History tab.
   tab: SidebarTab
   onTabChange: (tab: SidebarTab) => void
@@ -148,6 +181,8 @@ export function SidebarContent({ tab, onTabChange, files, allFiles, loading, sea
   fileManager: FileManager
   // Context menu actions ("open" depends on the tree, so it's added here).
   menu: Omit<TreeMenuActions, "open">
+  // Changes tab "Discard All Changes" (asks first).
+  onDiscardAll: () => void
   // Open a file from the Changes/Staged trees.
   onOpenChange: (file: string, staged: boolean) => void
   // Open a file from the All Files tree.
@@ -332,10 +367,12 @@ export function SidebarContent({ tab, onTabChange, files, allFiles, loading, sea
       </TabsList>
       <div className="mt-2 space-y-0">
         <TabsContent value="changes" className="mt-0 px-2">
+          <ChangesToolbar files={changesFiles} staged={false} busy={tree.busy} menu={menu} onDiscardAll={onDiscardAll} />
           {selectionBar("changes")}
           {withMenu("changes", renderTree("changes", changesFiles.length, "No changes", 5))}
         </TabsContent>
         <TabsContent value="staged" className="mt-0 px-2">
+          <ChangesToolbar files={stagedFiles} staged busy={tree.busy} menu={menu} />
           {selectionBar("staged")}
           {withMenu("staged", renderTree("staged", stagedFiles.length, "Nothing staged", 3))}
         </TabsContent>

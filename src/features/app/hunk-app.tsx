@@ -609,6 +609,7 @@ export function HunkApp() {
       onOpenTreeFile={openFromTree}
       onNavigate={onNavigate}
       fileManager={fileManager}
+      onDiscardAll={() => discardDialog.show({ action: "discardAll" })}
       menu={{
         newItem: fileManager.startCreate,
         rename: fileManager.startRename,

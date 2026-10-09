@@ -1,5 +1,5 @@
 import type { KeyboardEvent, ReactNode } from "react"
-import { ChevronDown, File, FilePlus, Folder, FolderPlus, Minus, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react"
+import { ChevronDown, File, Folder, Minus, Plus, RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { statusBadgeColor, statusIcon, statusLabel } from "@/features/files/status-display"
@@ -67,11 +67,11 @@ function RowButton({ title, className, disabled, onClick, children }: {
   )
 }
 
-// Row actions appear on hover/focus; touch screens can't hover, so they're
-// always shown there.
+// Changes/Staged row actions appear on hover/focus; touch screens can't
+// hover, so they're always shown there. All Files rows have none — create,
+// rename and delete live in the right-click menu (long-press on touch).
 const reveal = "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 pointer-coarse:opacity-100 text-muted-foreground"
 const hoverReveal = cn(reveal, "hover:text-destructive")
-const hoverRevealNeutral = cn(reveal, "hover:text-foreground")
 
 // Keyboard navigation between rows: Enter/Space activates, Up/Down moves
 // focus (Shift extends the selection), Right/Left expands/collapses
@@ -298,26 +298,6 @@ function TreeLevel(props: FileTreeProps & { depth: number; parent: string }) {
                   <p className="text-xs">{node.path}</p>
                 </TooltipContent>
               </Tooltip>
-              {manage && isDir && (
-                <>
-                  <RowButton title="New file in this folder (A)" className={hoverRevealNeutral} disabled={busy} onClick={() => manage.startCreate("file", node.path)}>
-                    <FilePlus size={12} />
-                  </RowButton>
-                  <RowButton title="New folder in this folder (Shift+A)" className={hoverRevealNeutral} disabled={busy} onClick={() => manage.startCreate("dir", node.path)}>
-                    <FolderPlus size={12} />
-                  </RowButton>
-                </>
-              )}
-              {manage && !isDir && (
-                <RowButton title="Rename (F2)" className={hoverRevealNeutral} disabled={busy} onClick={() => manage.startRename(node.path)}>
-                  <Pencil size={12} />
-                </RowButton>
-              )}
-              {mode === "all" && (
-                <RowButton title={isDir ? "Delete folder (Del)" : "Delete file (Del)"} className={hoverReveal} disabled={busy} onClick={() => props.onDelete(targets())}>
-                  <Trash2 size={12} />
-                </RowButton>
-              )}
               {mode !== "all" && isDir && (
                 <RowButton
                   title={staged ? "Unstage all files in this directory" : "Stage all files in this directory"}
