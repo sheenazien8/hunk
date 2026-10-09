@@ -43,6 +43,11 @@ COPY --from=builder /app/.next/static ./.next/static
 # Agents offered in the chat: both installed above. (The host's own
 # acp.config.json is dockerignored.)
 COPY --chown=node:node acp.config.example.json ./acp.config.json
+# Plugins (plugins.example.json): their servers run in this container. The
+# kanban board's SQLite file lives in a volume (see docker-compose.yml).
+COPY --from=builder --chown=node:node /app/plugins ./plugins
+COPY --chown=node:node plugins.example.json ./plugins.json
+RUN mkdir -p plugins/kanban/data && chown node:node plugins/kanban/data
 # The base image's `node` user is uid 1000, which matches the host user that
 # owns the repos mounted from /mnt/storage and /DATA — required for git to
 # write (stage/commit) into them without permission errors.

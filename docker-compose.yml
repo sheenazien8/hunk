@@ -24,7 +24,12 @@ services:
       - ${HOME}/.claude.json:/home/node/.claude.json
       # pi (pi-acp): settings, auth, extensions and sessions from the host.
       - ${HOME}/.pi:/home/node/.pi
+      # Kanban plugin database (plugins/kanban).
+      - kanban-data:/app/plugins/kanban/data
     tmpfs:
       # pi runs ~/.pi/agent/bin/{fd,rg} before the system ones; the host's are
       # glibc builds that can't run on alpine, so hide them (the image has fd + rg).
       - /home/node/.pi/agent/bin:uid=1000,gid=1000
+
+volumes:
+  kanban-data:
