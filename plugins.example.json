@@ -1,0 +1,19 @@
+{
+  "plugins": [
+    {
+      "id": "plans",
+      "name": "Plan Tracker",
+      "url": "http://127.0.0.1:4310",
+      "command": ["node", "server.mjs"],
+      "cwd": "plugins/plan-tracker"
+    },
+    {
+      "id": "kanban",
+      "name": "Kanban",
+      "url": "http://127.0.0.1:4320",
+      "mcp": "/mcp",
+      "command": ["node", "--disable-warning=ExperimentalWarning", "server.mjs"],
+      "cwd": "plugins/kanban"
+    }
+  ]
+}
