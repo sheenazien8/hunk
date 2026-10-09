@@ -41,6 +41,9 @@ export interface BufferEntry {
   commitData: CommitResponse | null
   commitError: string
   commitFile?: string
+  // Plugin tabs: the plugin id, and a counter bumped to reload its page.
+  plugin?: string
+  pluginNonce: number
   // In-file find state, scoped to this tab.
   findOpen: boolean
   findQuery: string
@@ -58,6 +61,7 @@ export interface TabKey {
   oldPath?: string
   commit?: string
   commitFile?: string
+  plugin?: string
 }
 
 // Key for a commit tab.
@@ -67,13 +71,22 @@ export function commitTabKey(sha: string, commitFile?: string): TabKey {
 
 // The repo path is part of the id so a stale id from another repo never
 // resolves to a live entry. A commit gets one tab whatever file it was opened for.
-export function makeTabId(repo: string, { file, staged, fromAll, commit }: TabKey) {
+export function pluginTabKey(plugin: string): TabKey {
+  return { file: "", staged: false, fromAll: false, plugin }
+}
+
+export function isFileTab(entry: BufferEntry) {
+  return !entry.commit && !entry.plugin
+}
+
+export function makeTabId(repo: string, { file, staged, fromAll, commit, plugin }: TabKey) {
+  if (plugin) return `${repo}::plugin::${plugin}`
   if (commit) return `${repo}::commit::${commit}`
   return `${repo}::${file}::${staged ? "s" : "u"}::${fromAll ? "a" : "d"}`
 }
 
 export function newEntry(repo: string, key: TabKey): BufferEntry {
-  const { file, staged, fromAll, oldPath, commit, commitFile } = key
+  const { file, staged, fromAll, oldPath, commit, commitFile, plugin } = key
   return {
     id: makeTabId(repo, key),
     file,
@@ -96,6 +109,8 @@ export function newEntry(repo: string, key: TabKey): BufferEntry {
     commitData: null,
     commitError: "",
     commitFile,
+    plugin,
+    pluginNonce: 0,
     findOpen: false,
     findQuery: "",
     findCaseSensitive: false,
@@ -188,7 +203,7 @@ export function bufferReducer(state: BufferState, action: BufferAction): BufferS
       const seen = new Set<string>()
       const entries: BufferEntry[] = []
       for (const b of state.entries) {
-        const file = b.commit ? null : remapPath(b.file, action.from, action.to)
+        const file = !isFileTab(b) ? null : remapPath(b.file, action.from, action.to)
         let next = b
         if (file !== null) {
           const key = action.keyFor(file, b)
@@ -217,7 +232,7 @@ export function bufferReducer(state: BufferState, action: BufferAction): BufferS
 
     case "closeUnder":
       return state.entries
-        .filter(b => !b.commit && isUnder(b.file, action.path))
+        .filter(b => isFileTab(b) && isUnder(b.file, action.path))
         .reduce((s, b) => bufferReducer(s, { type: "close", id: b.id }), state)
   }
 }
@@ -226,7 +241,7 @@ export function bufferReducer(state: BufferState, action: BufferAction): BufferS
 // Only the *list* of open tabs and the active one are persisted per repo;
 // content is always re-fetched after a reload.
 
-type PersistedTab = { file: string; staged: boolean; fromAll: boolean; commit?: string; commitFile?: string }
+type PersistedTab = { file: string; staged: boolean; fromAll: boolean; commit?: string; commitFile?: string; plugin?: string }
 type PersistedBuffer = { tabs: PersistedTab[]; activeId: string | null }
 
 function tabsStorageKey(repo: string) {
@@ -259,7 +274,7 @@ export function readPersistedBuffer(repo: string): BufferState {
 export function writePersistedBuffer(repo: string, { entries, activeId }: BufferState) {
   try {
     const payload: PersistedBuffer = {
-      tabs: entries.map(b => ({ file: b.file, staged: b.staged, fromAll: b.fromAll, commit: b.commit, commitFile: b.commitFile })),
+      tabs: entries.map(b => ({ file: b.file, staged: b.staged, fromAll: b.fromAll, commit: b.commit, commitFile: b.commitFile, plugin: b.plugin })),
       activeId,
     }
     localStorage.setItem(tabsStorageKey(repo), JSON.stringify(payload))

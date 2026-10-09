@@ -91,6 +91,7 @@ export function useBuffer(repoPath: string, statusLoading: boolean) {
   // unmerged (a combined diff) — the conflict view works on the file itself.
   // Commit tabs load the commit instead.
   const fetchEntry = useCallback(async (entry: BufferEntry) => {
+    if (entry.plugin) return
     inFlightRef.current.add(entry.id)
     update(entry.id, { diffLoading: true })
     try {
@@ -142,8 +143,9 @@ export function useBuffer(repoPath: string, statusLoading: boolean) {
   const refresh = useCallback((entry: BufferEntry) => {
     if (inFlightRef.current.has(entry.id) || entry.diffLoading) return
     activate(entry.id)
-    void fetchEntry(entry)
-  }, [activate, fetchEntry])
+    if (entry.plugin) update(entry.id, { pluginNonce: entry.pluginNonce + 1 })
+    else void fetchEntry(entry)
+  }, [activate, fetchEntry, update])
 
   // Once git status has loaded (so rename hints are known), fetch the active
   // tab's content — on first load, after a repo switch, and whenever another

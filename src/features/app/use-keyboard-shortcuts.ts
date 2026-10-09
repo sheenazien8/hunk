@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react"
-import type { BufferEntry } from "@/features/buffer/buffer"
+import { type BufferEntry, isFileTab } from "@/features/buffer/buffer"
 
 interface Shortcuts {
   active: BufferEntry | null
@@ -51,7 +51,7 @@ export function useKeyboardShortcuts(shortcuts: Shortcuts) {
         // Also stops the browser's print dialog.
         e.preventDefault()
         openQuickOpen()
-      } else if (key === "f" && active && !active.editMode && !active.commit) {
+      } else if (key === "f" && active && !active.editMode && isFileTab(active)) {
         e.preventDefault()
         openFind()
       } else if (e.code === "KeyN" && e.altKey && !e.shiftKey) {
