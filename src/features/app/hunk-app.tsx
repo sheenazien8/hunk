@@ -9,7 +9,7 @@ import { useAgent } from "@/features/agent/use-agent"
 import { DeleteBranchDialog } from "@/features/branches/branch-dialogs"
 import { BranchPicker } from "@/features/branches/branch-picker"
 import { localNameOf, useBranches } from "@/features/branches/use-branches"
-import { type BufferEntry, type TabKey, commitTabKey, committedStagedTabs, makeTabId } from "@/features/buffer/buffer"
+import { type BufferEntry, type TabKey, commitTabKey, committedStagedTabs, isFileTab, makeTabId, pluginTabKey } from "@/features/buffer/buffer"
 import { CommitBar } from "@/features/buffer/commit-bar"
 import { TabBar } from "@/features/buffer/tab-bar"
 import { useBuffer } from "@/features/buffer/use-buffer"
@@ -23,6 +23,9 @@ import { focusFindInput } from "@/features/find/highlight-segments"
 import { useFind } from "@/features/find/use-find"
 import type { CommitActionKind, CommitActions } from "@/features/history/commit-menu"
 import { useHistory } from "@/features/history/use-history"
+import { type HostContext, PluginFrames } from "@/features/plugins/plugin-frames"
+import { PluginMenu } from "@/features/plugins/plugin-menu"
+import { usePlugins } from "@/features/plugins/use-plugins"
 import { QuickOpen } from "@/features/quick-open/quick-open"
 import { useQuickOpen } from "@/features/quick-open/use-quick-open"
 import { defaultRepo, selectionFromUrl, syncRepoToUrl } from "@/features/projects/projects"
@@ -45,6 +48,7 @@ import { samePath } from "@/features/worktrees/worktrees"
 import { mentionableFiles } from "@/lib/acp/mentions"
 import { countConflicts, parseConflicts, resolveConflict } from "@/lib/git/parse-conflict"
 import { type ActionName, type ActionPayload, type Commit, type GitFile, PUSH_REJECTED, type Worktree } from "@/lib/git/types"
+import type { PluginMessage } from "@/lib/plugins/types"
 import { ActionToast } from "./action-toast"
 import { AppHeader } from "./app-header"
 import { useKeyboardShortcuts } from "./use-keyboard-shortcuts"
@@ -109,7 +113,7 @@ export function HunkApp() {
   const headPushed = !!repoState.head && !!repoState.upstream && !repoState.gone && repoState.ahead === 0
 
   // The active tab is an unmerged file: the viewer shows conflict resolution.
-  const conflicted = !!active && !active.commit && !active.fromAll && !active.staged
+  const conflicted = !!active && isFileTab(active) && !active.fromAll && !active.staged
     && status.files.some(f => f.path === active.file && f.status === "conflicted")
 
   // --- Opening files --------------------------------------------------------
@@ -262,7 +266,7 @@ export function HunkApp() {
   }, [dirs])
   const fileManager = useFileManager({
     entries: status.allFiles,
-    activeFile: active && !active.commit ? active.file : undefined,
+    activeFile: active && isFileTab(active) ? active.file : undefined,
     runAction,
     expandDir,
   })
@@ -319,16 +323,64 @@ export function HunkApp() {
     if (fresh && active && !active.dirty && !active.editMode) void buffer.fetchEntry(active)
   }, [status, active, buffer])
 
+  // --- Plugins ---------------------------------------------------------------
+
+  const plugins = usePlugins()
+  const pluginName = useCallback((id: string) => plugins?.find(p => p.id === id)?.name ?? id, [plugins])
+  const { entries: bufferEntries, closeMany: closeTabs } = buffer
+  useEffect(() => {
+    if (!plugins) return
+    const removed = bufferEntries.filter(e => e.plugin && !plugins.some(p => p.id === e.plugin))
+    if (removed.length > 0) closeTabs(removed.map(e => e.id))
+  }, [plugins, bufferEntries, closeTabs])
+  const openPlugin = (id: string) => buffer.open(pluginTabKey(id))
+  const pluginContext = useMemo<HostContext>(() => ({
+    repo: repoPath,
+    project: projectDir,
+    theme: isDark ? "dark" : "light",
+  }), [repoPath, projectDir, isDark])
+
   const agentPanel = useAgentPanel()
   const repoFiles = useMemo(() => mentionableFiles(status.allFiles), [status.allFiles])
   const changedFiles = useMemo(() => [...new Set(status.files.map(f => f.path))], [status.files])
   const quickOpen = useQuickOpen()
   // Open file tabs, most recent first, the active one left out.
   const recentFiles = useMemo(
-    () => [...new Set(buffer.entries.filter(b => !b.commit && b.id !== buffer.activeId).map(b => b.file).reverse())],
+    () => [...new Set(buffer.entries.filter(b => isFileTab(b) && b.id !== buffer.activeId).map(b => b.file).reverse())],
     [buffer.entries, buffer.activeId],
   )
   const agent = useAgent(repoPath, agentPanel.visible, agentChangedFiles)
+
+  const startPluginTask = async (plugin: string, text: string, files: string[]) => {
+    const preview = text.length > 600 ? `${text.slice(0, 600)}…` : text
+    if (!(await askConfirm({
+      title: `Start an agent task from ${pluginName(plugin)}?`,
+      description: (
+        <>
+          A new agent session will start in {repoPath.split("/").pop()} with this prompt:
+          <span className="mt-2 block max-h-60 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted p-2 font-mono text-xs text-foreground">{preview}</span>
+        </>
+      ),
+      confirmLabel: "Start agent",
+    }))) return
+    const known = new Set(repoFiles)
+    agentPanel.show()
+    await agent.startTask(text, files.filter(f => known.has(f)))
+  }
+
+  const onPluginMessage = (message: PluginMessage, plugin: string) => {
+    if (message.type === "hunk:agentTask") {
+      void startPluginTask(plugin, message.text, message.files)
+    } else if (message.type === "hunk:openFile") {
+      if (message.line) openFromQuickOpen(message.path, message.line)
+      else openFromTree(message.path)
+    } else if (message.type === "hunk:toast") {
+      setActionResult({ ok: message.ok !== false, message: message.message })
+    } else if (message.type === "hunk:refresh") {
+      void status.loadStatus()
+    }
+  }
+
   const editing = useEditing({ repoPath, buffer, files: status.files, loadStatus: status.loadStatus, setActionResult })
 
   const requestDiscard = (files: string[], staged: boolean) =>
@@ -462,7 +514,7 @@ export function HunkApp() {
   const requestClose = useCallback(async (entry: BufferEntry) => {
     if (entry.dirty && !(await askConfirm({
       title: "Discard unsaved changes?",
-      description: `Close ${entry.commit ? `commit ${entry.commit.slice(0, 7)}` : entry.file} without saving?`,
+      description: `Close ${entry.commit ? `commit ${entry.commit.slice(0, 7)}` : entry.plugin ?? entry.file} without saving?`,
       confirmLabel: "Discard & close",
       destructive: true,
     }))) return
@@ -482,7 +534,7 @@ export function HunkApp() {
   }, [buffer, askConfirm])
 
   const openFind = useCallback(() => {
-    if (!active || active.commit || conflicted) return
+    if (!active || !isFileTab(active) || conflicted) return
     find.open()
     focusFindInput()
   }, [find, active, conflicted])
@@ -709,6 +761,7 @@ export function HunkApp() {
           onToggleAgent={agentPanel.toggle}
           onOpenMobileSidebar={() => sidebar.setMobileOpen(true)}
           onQuickOpen={quickOpen.show}
+          tools={<PluginMenu plugins={plugins ?? []} onOpen={openPlugin} />}
           operation={repoState.operation}
           onContinueOperation={() => void runAction("continueOperation")}
           onAbortOperation={abortOperation}
@@ -721,6 +774,7 @@ export function HunkApp() {
               entries={buffer.entries}
               activeId={buffer.activeId}
               files={status.files}
+              pluginName={pluginName}
               onActivate={buffer.activate}
               onRefresh={buffer.refresh}
               onClose={requestClose}
@@ -733,7 +787,8 @@ export function HunkApp() {
               onCommit={message => runAction("commit", { message })}
               onAmend={amend}
             />
-            <ViewerPanel
+            <PluginFrames entries={buffer.entries} activeId={buffer.activeId} context={pluginContext} onMessage={onPluginMessage} />
+            {!active?.plugin && <ViewerPanel
               active={active}
               repoPath={repoPath}
               conflicted={conflicted}
@@ -744,7 +799,7 @@ export function HunkApp() {
               commitActions={commitActions}
               find={find}
               on={viewerHandlers}
-            />
+            />}
           </main>
           <AgentFrame
             panel={agentPanel}
@@ -754,7 +809,7 @@ export function HunkApp() {
                 repo={repoPath}
                 files={repoFiles}
                 changedFiles={changedFiles}
-                activeFile={active && !active.commit ? active.file : null}
+                activeFile={active && isFileTab(active) ? active.file : null}
                 onClose={agentPanel.close}
                 onOpenFile={file => {
                   openFromTree(file)

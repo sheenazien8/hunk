@@ -44,3 +44,4 @@ projects.json
 docs/plan/
 .memory/
 acp.config.json
+plugins.json

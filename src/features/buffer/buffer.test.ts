@@ -7,6 +7,7 @@ import {
   committedStagedTabs,
   emptyBuffer,
   newEntry,
+  pluginTabKey,
   readPersistedBuffer,
   writePersistedBuffer,
 } from "./buffer"
@@ -152,6 +153,17 @@ describe("persistence", () => {
     const restored = readPersistedBuffer(repo)
     expect(restored.entries.map(e => [e.file, e.commit, e.commitFile])).toEqual([["a", undefined, undefined], ["", "abc123", "x.ts"]])
     expect(restored.activeId).toBe(commit.id)
+  })
+
+  it("round-trips plugin tabs and leaves them out of remap / closeUnder", () => {
+    const plugin = newEntry(repo, pluginTabKey("plans"))
+    expect(plugin.id).toBe(`${repo}::plugin::plans`)
+    let s = bufferReducer(openAll(["a"]), { type: "open", entry: plugin })
+    s = bufferReducer(s, { type: "remap", repo, from: "", to: "x", keyFor: file => ({ file, staged: false, fromAll: false }) })
+    s = bufferReducer(s, { type: "closeUnder", path: "" })
+    expect(s.entries.map(e => e.id)).toEqual([entry("a").id, plugin.id])
+    writePersistedBuffer(repo, s)
+    expect(readPersistedBuffer(repo).entries.map(e => e.plugin)).toEqual([undefined, "plans"])
   })
 
   it("falls back to the first tab when the stored active id is stale", () => {

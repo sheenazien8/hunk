@@ -22,6 +22,10 @@ const serwist = new Serwist({
       matcher: ({ sameOrigin, url: { pathname } }) => sameOrigin && pathname.startsWith("/api/acp/"),
       handler: new NetworkOnly(),
     },
+    {
+      matcher: ({ sameOrigin, url: { pathname } }) => sameOrigin && (pathname.startsWith("/plugins/") || pathname === "/api/plugins"),
+      handler: new NetworkOnly(),
+    },
     ...defaultCache,
   ],
 });

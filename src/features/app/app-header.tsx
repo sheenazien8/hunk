@@ -64,6 +64,7 @@ export function AppHeader(props: {
   onToggleAgent: () => void
   onOpenMobileSidebar: () => void
   onQuickOpen: () => void
+  tools?: ReactNode
   operation?: GitOperation
   onContinueOperation: () => void
   onAbortOperation: () => void
@@ -84,6 +85,7 @@ export function AppHeader(props: {
         <span aria-hidden className="mx-1 hidden h-5 w-px bg-border sm:block" />
         <div className="flex min-w-0 items-center gap-1">{props.contextControls}</div>
         <div className="flex-1" />
+        {props.tools}
         <IconTip tip="Go to file (Ctrl+P)">
           <Button variant="outline" size="icon" className="h-9 w-9" aria-label="Go to file" onClick={props.onQuickOpen}>
             <Search size={16} />

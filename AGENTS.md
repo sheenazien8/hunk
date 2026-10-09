@@ -1,10 +1,10 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-19 (updated 2026-09-28 after the architecture refactor — see `docs/plan/20-refactor-architecture.md`)
+**Generated:** 2026-02-19 (updated 2026-09-28 after the architecture refactor — see `docs/plan/20-refactor-architecture.md`; 2026-10-09 for plugins)
 
 ## OVERVIEW
 Project: **Hunk** (`hunk`; formerly git-review — the repo folder keeps that name)
-A local multi-repo Git review tool: a single-page Next.js app that runs `git` (via `child_process.execFile`, never a shell) against a repository chosen from `projects.json`. Features: staged/untracked file lists, unified/split/raw diffs, full-file content view (with syntax highlighting and optional Markdown rendering), filesystem file browser, staging/unstaging/commit/push actions, blame, commit history + commit detail tabs, branch switching/creation/deletion, stash, merge-conflict resolution, and an **agent chat panel** (ACP — Agent Client Protocol: the server spawns `claude-agent-acp` / `pi-acp` over stdio in the active repo). Deployable as a Dockerized installable PWA.
+A local multi-repo Git review tool: a single-page Next.js app that runs `git` (via `child_process.execFile`, never a shell) against a repository chosen from `projects.json`. Features: staged/untracked file lists, unified/split/raw diffs, full-file content view (with syntax highlighting and optional Markdown rendering), filesystem file browser, staging/unstaging/commit/push actions, blame, commit history + commit detail tabs, branch switching/creation/deletion, stash, merge-conflict resolution, an **agent chat panel** (ACP — Agent Client Protocol: the server spawns `claude-agent-acp` / `pi-acp` over stdio in the active repo), and **plugins**: separate apps listed in `plugins.json`, shown as editor tabs and offered to agents as MCP servers (the plugins themselves live in their own repository). Deployable as a Dockerized installable PWA.
 
 Stack: Next.js **16.3.4** (App Router, Turbopack) · React **19.2.8** · TypeScript **5** · Tailwind CSS **v4** (via `@tailwindcss/postcss`) · shadcn/ui (new-york style, Radix UI primitives) · lucide-react icons · Serwist **9** (PWA service worker) · react-markdown + remark-gfm + rehype-highlight + highlight.js (content rendering) · @agentclientprotocol/sdk (agent chat) · Vitest **5** · pnpm **11.8.0** · Docker (node:22-alpine, standalone output)
 
@@ -27,13 +27,15 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── login/page.tsx          # Login form
 │   ├── manifest.ts             # MetadataRoute.Manifest → /manifest.webmanifest (only source — no public/ copy)
 │   ├── sw.ts                   # Serwist service worker source
-│   └── api/
-│       ├── auth/{login,logout,me}/route.ts
-│       ├── git/{status,diff,content,all-files,action,worktrees}/route.ts
-│       ├── git/{blame,log,commit,branches,stash}/route.ts   (diff also takes ?commit=<sha>)
-│       └── acp/{agents,sessions,action}/route.ts, acp/events/route.ts (SSE stream)
-│                               # Each: parse params → resolveRepo() → one server/ call → JSON.
-│                               #   Wrapped in withErrors() (HttpError → status, else 500 + git stderr).
+│   ├── api/
+│   │   ├── auth/{login,logout,me}/route.ts
+│   │   ├── git/{status,diff,content,all-files,action,worktrees}/route.ts
+│   │   ├── git/{blame,log,commit,branches,stash}/route.ts   (diff also takes ?commit=<sha>)
+│   │   ├── acp/{agents,sessions,action}/route.ts, acp/events/route.ts (SSE stream)
+│   │   └── plugins/route.ts    # GET plugin list (id + name) for the header menu
+│   │                           # Each: parse params → resolveRepo() → one server/ call → JSON.
+│   │                           #   Wrapped in withErrors() (HttpError → status, else 500 + git stderr).
+│   └── plugins/[id]/[[...path]]/route.ts   # forwards every method to the plugin (session-checked)
 ├── src/proxy.ts                # Next 16 "proxy" (was middleware.ts): JWT session check, 401/redirect
 ├── src/server/                 # `import "server-only"` in every module
 │   ├── config.ts               # projects.json (build-time import), defaultRepo(), findProject(),
@@ -54,10 +56,13 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── git/commit-tools.ts     # amend, undoCommit, revert, cherryPick, continue/abortOperation
 │   ├── fs/files.ts             # read/write/create (file|dir)/rename/remove repo paths (path- and .git-guarded)
 │   ├── fs/walk.ts              # All Files walker + ignore-pattern matching
-│   └── acp/                    # agent chat: config.ts (acp.config.json), agent-process.ts (spawn +
-│                               #   SDK ClientSideConnection), session.ts (event log, permissions),
-│                               #   registry.ts (globalThis maps, list/open/prompt/cancel/close, idle reaper),
-│                               #   shell.ts (`!`/`!!` prompt-box commands)
+│   ├── acp/                    # agent chat: config.ts (acp.config.json), agent-process.ts (spawn +
+│   │                           #   SDK ClientSideConnection), session.ts (event log, permissions),
+│   │                           #   registry.ts (globalThis maps, list/open/prompt/cancel/close, idle reaper),
+│   │                           #   shell.ts (`!`/`!!` prompt-box commands)
+│   └── plugins/                # config.ts (plugins.json), process.ts (start/reuse plugin servers),
+│                               #   forward.ts (proxy + x-hunk-* headers), mcp.ts (MCP servers for agent
+│                               #   sessions, stdio bridge, HUNK_REPO/HUNK_PROJECT agent env)
 ├── src/lib/                    # isomorphic + pure (no "use client", no server-only)
 │   ├── git/types.ts            # API contract shared by routes and client (GitFile, RepoEntry, ActionName…)
 │   ├── git/parse-status.ts     # porcelain v1 parser (one entry per staged/unstaged side)
@@ -69,9 +74,10 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │                               #   line-diff.ts (ACP diff → unified diff), permissions.ts, mentions.ts (@file parsing/ranking),
 │                               #   agent-config.ts (settings → toolbar controls, context usage), shell-prefix.ts (!/!! parsing),
 │                               #   tail-lines.ts (last-150-lines output buffer)
+│   ├── plugins/types.ts        # plugin list + postMessage bridge contract (parsePluginMessage)
 │   ├── repo-paths.ts           # topLevelPaths() — shared by server/fs and the sidebar
 │   ├── time-ago.ts             # compact relative times ("5m", "2d")
-│   ├── api-client.ts           # `api.*` typed fetchers — the ONLY place that calls /api/git/* and /api/acp/*
+│   ├── api-client.ts           # `api.*` typed fetchers — the ONLY place that calls /api/git/*, /api/acp/* and /api/plugins
 │   ├── auth.ts                 # JWT sign/verify, cookies, credentials from env
 │   └── utils.ts                # cn()
 ├── src/features/               # client UI, one folder per feature
@@ -101,10 +107,12 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── stash/                  # use-stash.ts, stash-menu.tsx (header popover)
 │   ├── sync/                   # sync-menu.tsx (header ↑↓ + fetch/pull/push popover), sync-dialogs.tsx
 │   ├── theme/theme.ts          # useTheme() over the .dark class
-│   └── agent/                  # use-agent.ts (session + EventSource), agent-frame.tsx (aside/sheet +
-│                               #   useAgentPanel, drag width), agent-panel.tsx, prompt-box.tsx
-│                               #   (@-mentions, action buttons, resizable), config-bar.tsx (model/thinking/mode…),
-│                               #   session-picker.tsx + use-session-list.ts (paged popover), chat-items.tsx
+│   ├── agent/                  # use-agent.ts (session + EventSource, startTask), agent-frame.tsx (aside/sheet +
+│   │                           #   useAgentPanel, drag width), agent-panel.tsx, prompt-box.tsx
+│   │                           #   (@-mentions, action buttons, resizable), config-bar.tsx (model/thinking/mode…),
+│   │                           #   session-picker.tsx + use-session-list.ts (paged popover), chat-items.tsx
+│   └── plugins/                # use-plugins.ts, plugin-menu.tsx (header Puzzle menu),
+│                               #   plugin-frames.tsx (iframes kept mounted + bridge listener)
 ├── src/hooks/use-popover.ts     # open state + outside-click/Escape for hand-rolled popovers
 ├── src/components/ui/          # shadcn/ui (badge, button, card, context-menu, dialog, input, scroll-area,
 │                               #   separator, sheet, skeleton, tabs, tooltip)
@@ -112,6 +120,8 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 ├── projects.json               # Project list (name + dir [+ ignore]) — gitignored; imported at build time
 ├── ignore.config.json          # Global ignore patterns for all-files browser (read at runtime)
 ├── acp.config.json             # Agent list for the chat (gitignored + dockerignored; see acp.config.example.json)
+├── plugins.json                # Plugin list (gitignored + dockerignored; see plugins.example.json)
+├── public/hunk-plugin-sdk.js   # SDK served by Hunk to plugin pages (window.hunk)
 ├── Dockerfile / docker-compose.yml
 └── public/                     # PWA icons (192/512/maskable/apple), generated sw.js, fonts/
 ```
@@ -132,9 +142,9 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 
 Docker serves the app on **host port 3456** → container 3000 (`docker-compose.yml`).
 
-**Host deploy** (alternative to Docker, so the agent chat sees the host toolchain — go, lerd php/composer, …): `scripts/deploy-host.sh` builds, copies static assets into `.next/standalone`, symlinks `acp.config.json`/`ignore.config.json` there, and (re)starts the systemd user unit `deploy/hunk.service` (port 3456, env from `.env.local`, explicit `PATH`). Don't run both — they share port 3456. Don't use `next start` (doesn't support `output: "standalone"`). pi-acp stores absolute session paths, so sessions created in Docker point at `/home/node/.pi/…`; rewrite them in `~/.pi/pi-acp/session-map.json` when switching.
+**Host deploy** (alternative to Docker, so the agent chat sees the host toolchain — go, lerd php/composer, …): `scripts/deploy-host.sh` builds, copies static assets into `.next/standalone`, symlinks `acp.config.json`/`ignore.config.json`/`plugins.json` there, and (re)starts the systemd user unit `deploy/hunk.service` (port 3456, env from `.env.local`, explicit `PATH`). Don't run both — they share port 3456. Don't use `next start` (doesn't support `output: "standalone"`). pi-acp stores absolute session paths, so sessions created in Docker point at `/home/node/.pi/…`; rewrite them in `~/.pi/pi-acp/session-map.json` when switching.
 
-Vitest (`vitest.config.mts`, node env). Unit tests sit next to the code (`*.test.ts`); git/fs integration tests run against temp repos from `test/git-repo.ts`; agent-chat tests drive `test/fake-acp-agent.mjs` (a scripted ACP agent) through the real registry. `server-only` is aliased to a stub for tests. UI has no automated tests — smoke-test in `pnpm dev`.
+Vitest (`vitest.config.mts`, node env). Unit tests sit next to the code (`*.test.ts`); git/fs integration tests run against temp repos from `test/git-repo.ts`; agent-chat tests drive `test/fake-acp-agent.mjs` (a scripted ACP agent) through the real registry. Vitest sets `HUNK_PLUGINS_CONFIG` to a missing file so tests never start real plugins. `server-only` is aliased to a stub for tests. UI has no automated tests — smoke-test in `pnpm dev`.
 
 ## CODING STANDARDS
 *   **Language**: TypeScript, `strict: true`, `noEmit`, `moduleResolution: bundler`, `jsx: react-jsx`. Path alias `@/*` → `./src/*`.
@@ -148,7 +158,7 @@ Vitest (`vitest.config.mts`, node env). Unit tests sit next to the code (`*.test
 ## WHERE TO LOOK
 *   **Source**: `src/server/` (backend), `src/features/` (UI), `src/lib/` (shared contract + parsers), `src/app/` (routes)
 *   **Feature plans**: `docs/plan/NN-*.md` (numbered by creation order; context + goals for each feature)
-*   **Docs**: `README.md` (stock create-next-app); Next.js guides in `node_modules/next/dist/docs/` (see the agent-rules block above)
+*   **Docs**: `README.md` (user-facing overview, setup, configuration, plugins); Next.js guides in `node_modules/next/dist/docs/` (see the agent-rules block above)
 *   **Other context files**: `CLAUDE.md` → references `@AGENTS.md` (this file)
 
 ## NOTES
@@ -198,3 +208,15 @@ Vitest (`vitest.config.mts`, node env). Unit tests sit next to the code (`*.test
     *   Auto mode is client-side (Hunk answers `allow_once`, then `allow_always`), per session, default off.
     *   **Docker**: the image installs `claude-agent-acp` (musl build), `pi` (`@earendil-works/pi-coding-agent`, pinned to the host's version) + `pi-acp`, and bash + ripgrep + fd, and ships `acp.config.example.json` as its `acp.config.json` (the host's own file is dockerignored). Compose mounts `~/.claude`, `~/.claude.json` and `~/.pi` into `/home/node` for logins, settings and sessions, and hides `~/.pi/agent/bin` behind a tmpfs (the host's glibc `fd`/`rg` can't run on alpine). The agents' tools only see the container's toolchain.
     *   `next dev` blocks HMR/dev resources for non-`localhost` origins (e.g. `127.0.0.1`); smoke-test the UI over `localhost` or against a production build.
+*   **Plugins** (separate apps shown as editor tabs):
+    *   **Config**: `plugins.json` (gitignored and dockerignored; `HUNK_PLUGINS_CONFIG` overrides the path; see `plugins.example.json`). Each entry is `{ id, name, url, mcp?, command?, cwd?, env? }` (`mcp` = path of the plugin's MCP endpoint, e.g. `/mcp`). It's read on every request, like `acp.config.json`, and a relative `cwd` resolves against the config file.
+    *   **Process**: when `command` is set, `server/plugins/process.ts` starts it on the first request with `PORT` (taken from `url`), `HUNK_PLUGIN_ID` and `HUNK_PLUGIN_BASE`, then waits until the port answers. A plugin that is already reachable is used as-is. Children are killed on exit.
+    *   **Forwarding**: `app/plugins/[id]/[[...path]]` → `server/plugins/forward.ts` forwards requests to the plugin. It checks the session itself, because the proxy matcher skips `*.png`. It strips `cookie`, `set-cookie` and any `x-hunk-*` headers the client sent. It adds `x-hunk-user`, `x-forwarded-prefix`, and `x-hunk-repo` when a `?repo=` param passes `resolveRepo()`. Root-relative redirects are rewritten under `/plugins/<id>`. The service worker uses NetworkOnly for these paths.
+    *   **UI**: the header Puzzle menu (`PluginMenu`, hidden when there are no plugins) opens a buffer tab with `plugin` set (id `<repo>::plugin::<id>`). Use `isFileTab()` wherever "a file tab" is meant. Plugin iframes stay mounted while hidden, so they keep their state; the tab's refresh button bumps `pluginNonce` to reload the iframe.
+    *   **Bridge** (`lib/plugins/types.ts`, `public/hunk-plugin-sdk.js`): same-origin `postMessage`, checked against the iframe's `contentWindow`. Hunk sends `hunk:context` (repo, project, theme); plugins send `hunk:ready`, `hunk:openFile {path, line?}`, `hunk:toast`, `hunk:refresh` and `hunk:agentTask {text, files}` (always confirmed by the user before a session starts). The SDK exposes `hunk.onContext/openFile/toast/refresh/startAgentTask/url()` and copies theme tokens into `--hunk-*` CSS variables.
+    *   **Agent tools (MCP)**: a plugin with `"mcp": "/path"` in `plugins.json` gets offered to every new, loaded or resumed agent session as an MCP server named after its id, so Claude sees its tools as `mcp__<id>__<tool>`. `server/plugins/mcp.ts` starts the plugin first; one that fails to start is skipped with a warning.
+        *   **Transport**: HTTP, straight to the plugin's `url`, when the agent advertises `mcpCapabilities.http` (claude-agent-acp does). Otherwise Hunk passes a stdio bridge (`node -e`, inline) that relays JSON-RPC lines to that URL.
+        *   **Context**: the `x-hunk-repo` and `x-hunk-project` headers (project = the projects.json dir, also for worktrees). The UI forward adds `x-hunk-project` too.
+        *   **Agents that read MCP from config files** (pi): pi-acp ignores `mcpServers`, but every agent process gets `HUNK_REPO` and `HUNK_PROJECT` in its environment (`pluginAgentEnv`; one process per agent + repo), and MCP plugins are started before the agent. A static entry can then pass the context as headers, e.g. in `~/.pi/agent/mcp-adapter.json` (pi-mcp-adapter interpolates `${VAR}` in headers): `"<id>": { "url": "http://127.0.0.1:<port>/mcp", "headers": { "x-hunk-repo": "${HUNK_REPO}", "x-hunk-project": "${HUNK_PROJECT}", "x-project-dir": "${PWD}" } }`. Outside Hunk the first two are empty; plugins resolve the project as `x-hunk-project`, then `x-hunk-repo`, then `x-project-dir`, so plain `pi` in a project dir still gets a project. Hunk sets `PWD` to the repo for its agents, and its forward strips `x-project-dir` from browser requests. pi blocks project-level MCP servers (`.pi/mcp-adapter.json`) until approved; `pi --mcp-config <file>` loads a config for one run (handy for testing against another port).
+        *   **Limits**: plugin config changes only apply to sessions opened afterwards. `ensurePlugin` reuses anything already answering on a plugin's port, so a dev server will talk to the live service's plugin (and its data) if that's running.
+    *   **Trust**: plugin pages are same-origin, so they can call `/api/*` as the logged-in user. Plugin servers run as the server user. Only list trusted plugins.

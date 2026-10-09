@@ -63,6 +63,11 @@ export function useAgentPanel() {
     setMobileOpen(false)
   }, [])
 
+  const show = useCallback(() => {
+    if (window.matchMedia(DESKTOP_QUERY).matches) setOpen(true)
+    else setMobileOpen(true)
+  }, [])
+
   // Drag the panel's left edge: moving left widens it. Clamped, persisted on
   // release.
   const startResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -99,7 +104,7 @@ export function useAgentPanel() {
   }, [])
 
   return {
-    isDesktop, open, mobileOpen, setMobileOpen, visible: isDesktop ? open : mobileOpen, toggle, close,
+    isDesktop, open, mobileOpen, setMobileOpen, visible: isDesktop ? open : mobileOpen, toggle, close, show,
     width, isResizing, startResize, resetWidth,
   }
 }

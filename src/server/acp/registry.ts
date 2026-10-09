@@ -3,6 +3,7 @@ import { pathToFileURL } from "url"
 import type { ContentBlock, SessionInfo } from "@agentclientprotocol/sdk"
 import type { AcpAction, AgentSessionSummary } from "@/lib/acp/types"
 import { HttpError } from "../http"
+import { pluginAgentEnv, pluginMcpServers } from "../plugins/mcp"
 import { resolveInRepo } from "../repo"
 import { AgentProcess } from "./agent-process"
 import { findAgent, type AgentConfig } from "./config"
@@ -61,7 +62,7 @@ async function getProcess(agent: AgentConfig, repo: string): Promise<AgentProces
     if (proc?.alive) return proc
     if (registry.processes.get(key) === existing) registry.processes.delete(key)
   }
-  const starting = AgentProcess.start(agent, repo, {
+  const starting = pluginAgentEnv(repo).then(env => AgentProcess.start(agent, repo, {
     sessionUpdate: params => {
       const session = registry.sessions.get(params.sessionId)
       if (!session) return
@@ -83,7 +84,7 @@ async function getProcess(agent: AgentConfig, repo: string): Promise<AgentProces
         registry.sessions.delete(session.id)
       }
     },
-  })
+  }, env))
   registry.processes.set(key, starting)
   starting.catch(() => {
     if (registry.processes.get(key) === starting) registry.processes.delete(key)
@@ -171,7 +172,8 @@ export async function openSession(repo: string, agentId: string | null, resumeId
   const proc = await getProcess(agent, repo)
   proc.touch()
   if (!resumeId) {
-    const res = await proc.connection.newSession({ cwd: repo, mcpServers: [] })
+    const mcpServers = await pluginMcpServers(repo, proc.capabilities)
+    const res = await proc.connection.newSession({ cwd: repo, mcpServers })
     const session = new AgentSession(res.sessionId, agent.id, repo)
     registry.sessions.set(session.id, session)
     session.setConfig(res.configOptions, res.modes)
@@ -187,9 +189,10 @@ export async function openSession(repo: string, agentId: string | null, resumeId
   const session = new AgentSession(resumeId, agent.id, repo)
   registry.sessions.set(resumeId, session)
   try {
+    const mcpServers = await pluginMcpServers(repo, caps)
     const res = caps.loadSession
-      ? await proc.connection.loadSession({ sessionId: resumeId, cwd: repo, mcpServers: [] })
-      : await proc.connection.resumeSession({ sessionId: resumeId, cwd: repo, mcpServers: [] })
+      ? await proc.connection.loadSession({ sessionId: resumeId, cwd: repo, mcpServers })
+      : await proc.connection.resumeSession({ sessionId: resumeId, cwd: repo, mcpServers })
     session.setConfig(res?.configOptions, res?.modes)
   } catch (e) {
     registry.sessions.delete(resumeId)

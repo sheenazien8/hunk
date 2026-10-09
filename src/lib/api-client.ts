@@ -19,6 +19,7 @@ import type {
   StatusResponse,
   WorktreesResponse,
 } from "@/lib/git/types"
+import type { PluginsResponse } from "@/lib/plugins/types"
 
 // Typed wrappers around /api/git/* and /api/acp/*. Every call resolves with the success
 // payload or throws an Error carrying the server's `error` message.
@@ -44,6 +45,10 @@ const json = (method: string, body: unknown): RequestInit => ({
 })
 
 export const api = {
+  async plugins() {
+    return (await request<PluginsResponse>("/api/plugins")).plugins
+  },
+
   status(repo: string) {
     return request<StatusResponse>(`/api/git/status?${query({ repo })}`)
   },
