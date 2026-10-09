@@ -3,6 +3,7 @@ import {
   AlignJustify,
   Check,
   Cherry,
+  Ellipsis,
   Eye,
   FileCode,
   FilePen,
@@ -20,9 +21,17 @@ import {
   Trash2,
   Undo,
   Undo2,
+  X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { BufferEntry, ViewMode } from "@/features/buffer/buffer"
@@ -32,6 +41,7 @@ import type { Find } from "@/features/find/use-find"
 import { type CommitActions, commitActionsFor } from "@/features/history/commit-menu"
 import type { ConflictChoice } from "@/lib/git/parse-conflict"
 import type { ActionName } from "@/lib/git/types"
+import { cn } from "@/lib/utils"
 import { FileViewer } from "./file-viewer"
 import { useFullscreen } from "./use-fullscreen"
 
@@ -65,6 +75,36 @@ function IconTip({ tip, children }: { tip: string; children: ReactNode }) {
   )
 }
 
+// One segment of the Split / Unified / Raw control.
+function ViewToggle({ label, active, onClick, children }: { label: string; active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <IconTip tip={label}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={active}
+        onClick={onClick}
+        className={cn(
+          "flex h-6 w-6 items-center justify-center rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+        )}
+      >
+        {children}
+      </button>
+    </IconTip>
+  )
+}
+
+// An overflow-menu item that is on or off (trailing check when on).
+function MenuToggle({ on, onSelect, children }: { on: boolean; onSelect: () => void; children: ReactNode }) {
+  return (
+    <DropdownMenuItem onSelect={onSelect} aria-checked={on} role="menuitemcheckbox">
+      {children}
+      {on && <Check className="ml-auto text-primary" />}
+    </DropdownMenuItem>
+  )
+}
+
 // The main card: file title + toolbar, find bar, and the file view.
 export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction, isSaving, canEdit, commitActions, find, on }: {
   active: BufferEntry | null
@@ -91,17 +131,22 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
   // the server says so when it would change nothing anyway.
   const can = commitData ? commitActionsFor(commitData, commitActions, commitActions.isOnBranch(commitData.sha)) : null
 
-  let title = active ? basename(active.file) : "Select a file"
-  if (commit) title = `Commit ${commit.slice(0, 7)}`
-  const subtitle = commit ? active?.commitData?.commit.subject ?? "" : active?.file
+  // Files: "dir/" muted + name on one line (the tab already shows the name).
+  const dir = active && !commit && active.file.includes("/") ? active.file.slice(0, active.file.lastIndexOf("/") + 1) : ""
+  const title = commit ? `Commit ${commit.slice(0, 7)}` : active ? basename(active.file) : "Select a file"
+  const subtitle = commit ? active?.commitData?.commit.subject ?? "" : ""
+  const isBlame = active?.viewMode === "blame"
 
   return (
     <Card ref={cardRef} className="diff-card flex min-h-0 flex-1 flex-col overflow-hidden">
       <CardHeader className="shrink-0 p-3 pb-2">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="truncate text-sm">{title}</CardTitle>
+          <CardTitle className="min-w-0 truncate text-sm" title={active && !commit ? active.file : undefined}>
+            {dir && <span className="font-normal text-muted-foreground">{dir}</span>}
+            {title}
+          </CardTitle>
           {active && (
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               {commitData && can && (
                 <>
                   {can.undo && (
@@ -180,6 +225,7 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      aria-label={active.staged ? "Discard staged changes" : "Discard changes"}
                       disabled={!!busyAction}
                       onClick={() => on.discard(active)}
                     >
@@ -187,121 +233,94 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
                     </Button>
                   </IconTip>
                   <IconTip tip={active.staged ? "Unstage this file" : "Stage this file"}>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" disabled={!!busyAction} onClick={() => on.toggleStaged(active)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1 px-2"
+                      aria-label={active.staged ? "Unstage this file" : "Stage this file"}
+                      disabled={!!busyAction}
+                      onClick={() => on.toggleStaged(active)}
+                    >
                       {busyAction === "add" || busyAction === "unstage"
                         ? <RefreshCw size={13} className="animate-spin" />
                         : active.staged ? <Minus size={13} /> : <Plus size={13} />}
+                      <span className="hidden sm:inline">{active.staged ? "Unstage" : "Stage"}</span>
                     </Button>
                   </IconTip>
+                  <div role="group" aria-label="Diff view" className="flex items-center rounded-md border border-border p-0.5">
+                    <ViewToggle label="Split" active={active.viewMode === "split"} onClick={() => on.setViewMode(active, "split")}>
+                      <Split size={13} />
+                    </ViewToggle>
+                    <ViewToggle label="Unified" active={active.viewMode === "unified"} onClick={() => on.setViewMode(active, "unified")}>
+                      <AlignJustify size={13} />
+                    </ViewToggle>
+                    <ViewToggle label="Raw file" active={active.viewMode === "raw"} onClick={() => on.setViewMode(active, "raw")}>
+                      <FileCode size={13} />
+                    </ViewToggle>
+                  </div>
                 </>
-              )}
-              {fileTools && isMarkdownFile(active.file) && !editing && !resolving && active.viewMode !== "blame" && (
-                <Button
-                  variant={active.mdRender ? "default" : "outline"}
-                  size="icon"
-                  className="h-7 w-7"
-                  title="Render as Markdown"
-                  onClick={() => on.toggleMarkdown(active)}
-                >
-                  <Eye size={13} />
-                </Button>
-              )}
-              {fileTools && canEdit && !editing && (
-                <IconTip tip="Edit file">
-                  <Button variant="outline" size="icon" className="h-7 w-7" title="Edit file" onClick={on.toggleEdit}>
-                    <FilePen size={13} />
-                  </Button>
-                </IconTip>
-              )}
-              {fileTools && active.fromAll && !editing && (
-                <IconTip tip="Delete file">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-7 w-7 text-destructive hover:text-destructive"
-                    title="Delete file"
-                    onClick={() => on.delete(active.file)}
-                  >
-                    <Trash2 size={13} />
-                  </Button>
-                </IconTip>
               )}
               {editing && (
                 <IconTip tip="Cancel editing">
-                  <Button variant="outline" size="icon" className="h-7 w-7" title="Cancel editing" onClick={on.toggleEdit}>
-                    <Minus size={13} />
-                  </Button>
-                </IconTip>
-              )}
-              {fileTools && !editing && (
-                <IconTip tip="File history">
-                  <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => on.showHistory(active.file)}>
-                    <History size={13} />
+                  <Button variant="outline" size="icon" className="h-7 w-7" aria-label="Cancel editing" onClick={on.toggleEdit}>
+                    <X size={13} />
                   </Button>
                 </IconTip>
               )}
               {fileTools && !editing && !resolving && (
-                <IconTip tip="Blame">
+                <IconTip tip="Search in file (Ctrl/Cmd+F)">
                   <Button
-                    variant={active.viewMode === "blame" ? "default" : "outline"}
+                    variant={active.findOpen ? "default" : "ghost"}
                     size="icon"
                     className="h-7 w-7"
-                    aria-pressed={active.viewMode === "blame"}
-                    onClick={() => on.toggleBlame(active)}
+                    aria-label="Search in file"
+                    aria-pressed={!!active.findOpen}
+                    onClick={on.toggleFind}
                   >
-                    <ScanText size={13} />
+                    <Search size={13} />
                   </Button>
                 </IconTip>
               )}
-              {fileTools && !active.fromAll && !editing && !resolving && (
-                <>
-                  <Button
-                    variant={active.viewMode === "raw" ? "default" : "outline"}
-                    size="icon"
-                    className="h-7 w-7"
-                    title="View raw file (syntax highlighted)"
-                    onClick={() => on.setViewMode(active, active.viewMode === "raw" ? "split" : "raw")}
-                  >
-                    <FileCode size={13} />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="More actions">
+                    <Ellipsis size={14} />
                   </Button>
-                  <Button
-                    variant={active.viewMode === "unified" ? "default" : "outline"}
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={() => on.setViewMode(active, "unified")}
-                  >
-                    <AlignJustify size={13} />
-                  </Button>
-                  <Button
-                    variant={active.viewMode === "split" ? "default" : "outline"}
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={() => on.setViewMode(active, "split")}
-                  >
-                    <Split size={13} />
-                  </Button>
-                </>
-              )}
-              {fileTools && !editing && !resolving && (
-                <Button
-                  variant={active.findOpen ? "default" : "outline"}
-                  size="icon"
-                  className="h-7 w-7"
-                  title="Search in file (Ctrl/Cmd+F)"
-                  onClick={on.toggleFind}
-                >
-                  <Search size={13} />
-                </Button>
-              )}
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-7 w-7"
-                title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                onClick={toggleFullscreen}
-              >
-                {isFullscreen ? <Minimize size={13} /> : <Maximize size={13} />}
-              </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  {fileTools && canEdit && !editing && (
+                    <DropdownMenuItem onSelect={on.toggleEdit}>
+                      <FilePen /> Edit file
+                    </DropdownMenuItem>
+                  )}
+                  {fileTools && isMarkdownFile(active.file) && !editing && !resolving && !isBlame && (
+                    <MenuToggle on={!!active.mdRender} onSelect={() => on.toggleMarkdown(active)}>
+                      <Eye /> Render Markdown
+                    </MenuToggle>
+                  )}
+                  {fileTools && !editing && !resolving && (
+                    <MenuToggle on={isBlame} onSelect={() => on.toggleBlame(active)}>
+                      <ScanText /> Blame
+                    </MenuToggle>
+                  )}
+                  {fileTools && !editing && (
+                    <DropdownMenuItem onSelect={() => on.showHistory(active.file)}>
+                      <History /> File history
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem onSelect={toggleFullscreen}>
+                    {isFullscreen ? <Minimize /> : <Maximize />} {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  </DropdownMenuItem>
+                  {fileTools && active.fromAll && !editing && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem variant="destructive" onSelect={() => on.delete(active.file)}>
+                        <Trash2 /> Delete file
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           )}
         </div>
