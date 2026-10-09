@@ -92,7 +92,7 @@ export function StashMenu({ stashes, busy, onOpen, onStash, onView, onApply, onP
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 flex max-h-[60vh] w-80 max-w-[calc(100vw-1.5rem)] flex-col rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
+        <div className="fixed inset-x-3 top-14 z-50 flex max-h-[60vh] sm:absolute sm:inset-x-auto sm:left-0 sm:top-full sm:mt-1 sm:w-80 flex-col rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
           <form
             className="space-y-1.5 border-b border-border p-2"
             onSubmit={e => {

@@ -90,7 +90,7 @@ export function SyncMenu({ branch, state, busyAction, onFetch, onPull, onPush }:
       {open && (
         <div
           role="menu"
-          className="absolute left-0 top-full z-50 mt-1 w-72 max-w-[calc(100vw-1.5rem)] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+          className="fixed inset-x-3 top-14 z-50 sm:absolute sm:inset-x-auto sm:left-0 sm:top-full sm:mt-1 sm:w-72 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
         >
           <div className="border-b border-border px-2 pb-1.5 pt-1 text-[11px]">
             {upstream && <div className="truncate font-mono text-muted-foreground">{branch} → {upstream}</div>}

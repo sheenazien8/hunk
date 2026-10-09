@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { Worktree } from "@/lib/git/types"
-import { defaultWorktreePath, findWorktree, worktreeLabel } from "./worktrees"
+import { defaultWorktreePath, findWorktree, tailPath, worktreeLabel } from "./worktrees"
 
 const wt = (over: Partial<Worktree>): Worktree => ({
   path: "/code/app", head: "0123456789abcdef", main: false, detached: false, bare: false, locked: false, prunable: false, ...over,
@@ -28,5 +28,17 @@ describe("worktreeLabel", () => {
     expect(worktreeLabel(wt({ branch: "feat" }))).toBe("feat")
     expect(worktreeLabel(wt({ detached: true }))).toBe("detached @ 0123456")
     expect(worktreeLabel(wt({ branch: "gone", prunable: true }))).toBe("gone (missing)")
+  })
+})
+
+describe("tailPath", () => {
+  it("keeps the last segments", () => {
+    expect(tailPath("/mnt/storage/code/app-feat")).toBe("…/code/app-feat")
+    expect(tailPath("/mnt/storage/code/app/", 1)).toBe("…/app")
+  })
+
+  it("leaves short paths alone", () => {
+    expect(tailPath("/code/app")).toBe("/code/app")
+    expect(tailPath("/")).toBe("/")
   })
 })

@@ -29,3 +29,11 @@ export function worktreeLabel(w: Worktree) {
   if (w.main) return `${name} (main)`
   return w.prunable ? `${name} (missing)` : name
 }
+
+// The last `parts` segments of a path, for compact pickers:
+// /mnt/code/app-feat → "…/code/app-feat".
+export function tailPath(p: string, parts = 2) {
+  const segs = trimSlashes(p).split("/").filter(Boolean)
+  if (segs.length <= parts) return trimSlashes(p)
+  return `…/${segs.slice(-parts).join("/")}`
+}

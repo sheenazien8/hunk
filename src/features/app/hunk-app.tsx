@@ -10,6 +10,7 @@ import { DeleteBranchDialog } from "@/features/branches/branch-dialogs"
 import { BranchPicker } from "@/features/branches/branch-picker"
 import { localNameOf, useBranches } from "@/features/branches/use-branches"
 import { type BufferEntry, type TabKey, commitTabKey, committedStagedTabs, makeTabId } from "@/features/buffer/buffer"
+import { CommitBar } from "@/features/buffer/commit-bar"
 import { TabBar } from "@/features/buffer/tab-bar"
 import { useBuffer } from "@/features/buffer/use-buffer"
 import { useEditing } from "@/features/buffer/use-editing"
@@ -37,12 +38,14 @@ import { ForcePushDialog } from "@/features/sync/sync-dialogs"
 import { SyncMenu } from "@/features/sync/sync-menu"
 import { useTheme } from "@/features/theme/theme"
 import { ViewerPanel, type ViewerHandlers } from "@/features/viewer/viewer-panel"
+import { RepoSwitcher } from "@/features/projects/repo-switcher"
 import { useWorktrees } from "@/features/worktrees/use-worktrees"
 import { AddWorktreeDialog, type NewWorktree, type NewWorktreeSeed, RemoveWorktreeDialog } from "@/features/worktrees/worktree-dialogs"
 import { samePath } from "@/features/worktrees/worktrees"
 import { mentionableFiles } from "@/lib/acp/mentions"
 import { countConflicts, parseConflicts, resolveConflict } from "@/lib/git/parse-conflict"
 import { type ActionName, type ActionPayload, type Commit, type GitFile, PUSH_REJECTED, type Worktree } from "@/lib/git/types"
+import { ActionToast } from "./action-toast"
 import { AppHeader } from "./app-header"
 import { useKeyboardShortcuts } from "./use-keyboard-shortcuts"
 
@@ -250,6 +253,7 @@ export function HunkApp() {
   }, [branches, history, status, active, buffer])
 
   const { busyAction, actionResult, setActionResult, runAction } = useGitActions(repoPath, afterAction, afterFailure)
+  const dismissResult = useCallback(() => setActionResult(null), [setActionResult])
 
   // --- File manager (sidebar Files tab) ---------------------------------------
 
@@ -643,8 +647,19 @@ export function HunkApp() {
     <TooltipProvider delayDuration={0}>
       <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
         <AppHeader
-          branchControls={
+          contextControls={
             <>
+              <RepoSwitcher
+                projectDir={projectDir}
+                repoPath={repoPath}
+                worktrees={worktrees.worktrees}
+                busy={!!busyAction}
+                onSelectProject={dir => void switchRepo(dir, dir)}
+                onSelectWorktree={path => void switchRepo(path)}
+                onAddWorktree={() => showAddWorktree()}
+                onRemoveWorktree={removeWorktreeDialog.show}
+              />
+              <span aria-hidden className="hidden text-muted-foreground/50 sm:inline">/</span>
               <BranchPicker
                 current={branches.current || status.branch}
                 branches={branches.branches}
@@ -686,29 +701,14 @@ export function HunkApp() {
             </>
           }
           error={status.error}
-          loading={status.loading}
-          actionResult={actionResult}
           busyAction={busyAction}
           isDark={isDark}
-          projectDir={projectDir}
-          repoPath={repoPath}
-          worktrees={worktrees.worktrees}
           onToggleTheme={toggleTheme}
           onToggleSidebar={sidebar.toggle}
           agentOpen={agentPanel.visible}
           onToggleAgent={agentPanel.toggle}
           onOpenMobileSidebar={() => sidebar.setMobileOpen(true)}
           onQuickOpen={quickOpen.show}
-          onDiscardAll={() => discardDialog.show({ action: "discardAll" })}
-          onProjectChange={dir => switchRepo(dir, dir)}
-          onWorktreeChange={path => switchRepo(path)}
-          onAddWorktree={() => showAddWorktree()}
-          onRemoveWorktree={removeWorktreeDialog.show}
-          onRefresh={() => void status.loadStatus()}
-          onCommit={message => runAction("commit", { message })}
-          headSubject={repoState.headSubject}
-          onAmend={amend}
-          onPush={() => void runAction("push")}
           operation={repoState.operation}
           onContinueOperation={() => void runAction("continueOperation")}
           onAbortOperation={abortOperation}
@@ -725,6 +725,13 @@ export function HunkApp() {
               onRefresh={buffer.refresh}
               onClose={requestClose}
               onCloseMany={entries => void requestCloseMany(entries)}
+            />
+            <CommitBar
+              stagedCount={status.files.filter(f => f.staged).length}
+              headSubject={repoState.headSubject}
+              busyAction={busyAction}
+              onCommit={message => runAction("commit", { message })}
+              onAmend={amend}
             />
             <ViewerPanel
               active={active}
@@ -758,6 +765,7 @@ export function HunkApp() {
           />
         </div>
 
+        <ActionToast result={actionResult} onDismiss={dismissResult} />
         <QuickOpen
           open={quickOpen.open}
           onOpenChange={quickOpen.setOpen}
