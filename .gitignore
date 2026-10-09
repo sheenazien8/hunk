@@ -45,3 +45,4 @@ docs/plan/
 .memory/
 acp.config.json
 plugins.json
+plugins/*
