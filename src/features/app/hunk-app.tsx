@@ -1,11 +1,12 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { ConfirmDialog, useConfirm } from "@/components/ui/confirm-dialog"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { AgentFrame, useAgentPanel } from "@/features/agent/agent-frame"
 import { AgentPanel } from "@/features/agent/agent-panel"
 import { useAgent } from "@/features/agent/use-agent"
-import { DeleteBranchDialog, SwitchBranchDialog } from "@/features/branches/branch-dialogs"
+import { DeleteBranchDialog } from "@/features/branches/branch-dialogs"
 import { BranchPicker } from "@/features/branches/branch-picker"
 import { localNameOf, useBranches } from "@/features/branches/use-branches"
 import { type BufferEntry, type TabKey, commitTabKey, makeTabId } from "@/features/buffer/buffer"
@@ -32,7 +33,7 @@ import { useFileManager } from "@/features/sidebar/use-file-manager"
 import { useExpandedDirs, useSidebar } from "@/features/sidebar/use-sidebar"
 import { StashMenu } from "@/features/stash/stash-menu"
 import { useStash } from "@/features/stash/use-stash"
-import { ForcePushDialog, PullStashDialog } from "@/features/sync/sync-dialogs"
+import { ForcePushDialog } from "@/features/sync/sync-dialogs"
 import { SyncMenu } from "@/features/sync/sync-menu"
 import { useTheme } from "@/features/theme/theme"
 import { ViewerPanel, type ViewerHandlers } from "@/features/viewer/viewer-panel"
@@ -83,6 +84,8 @@ export function HunkApp() {
   const find = useFind(active, buffer.update)
   const [fileSearch, setFileSearch] = useState("")
   const deleteDialog = useDialog<DeleteRequest>()
+  const confirm = useConfirm()
+  const askConfirm = confirm.ask
   const moveDialog = useDialog<string[]>()
   const discardDialog = useDialog<DiscardRequest>()
   const [addWorktreeOpen, setAddWorktreeOpen] = useState(false)
@@ -91,9 +94,7 @@ export function HunkApp() {
   const branches = useBranches(repoPath)
   const stash = useStash(repoPath)
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("changes")
-  const switchBranchDialog = useDialog<string>()
   const deleteBranchDialog = useDialog<string>()
-  const pullDialog = useDialog<{ rebase: boolean }>()
   const [forcePushOpen, setForcePushOpen] = useState(false)
   const repoState = status.state
   const currentBranch = status.branch || branches.current
@@ -331,23 +332,27 @@ export function HunkApp() {
   // --- Branches & stash ---------------------------------------------------
 
   // A remote branch with a local counterpart switches to the local one.
-  const requestSwitchBranch = (name: string) => {
+  const requestSwitchBranch = async (name: string) => {
     let target = name
     if (branches.branches.find(b => b.name === name)?.remote) {
       const local = localNameOf(name)
       if (branches.branches.some(b => !b.remote && b.name === local)) target = local
     }
-    if (buffer.entries.some(b => b.dirty) && !window.confirm("Open tabs have unsaved changes. Switch branches anyway?")) return
+    const dirty = buffer.entries.some(b => b.dirty)
+    if (dirty && !(await confirm.ask({
+      title: "Switch branch?",
+      description: "Open tabs have unsaved changes. Switching branches will discard them.",
+      confirmLabel: "Switch anyway",
+      destructive: true,
+    }))) return
     // git would carry tracked changes over (or refuse) — offer to stash them.
-    if (status.files.some(f => f.status !== "untracked")) switchBranchDialog.show(target)
-    else void runAction("switchBranch", { branch: target })
-  }
-
-  const confirmSwitchBranch = async () => {
-    const branch = switchBranchDialog.value
-    if (!branch) return
-    switchBranchDialog.setOpen(false)
-    await runAction("switchBranch", { branch, stash: true })
+    if (status.files.some(f => f.status !== "untracked")) {
+      if (await confirm.ask({
+        title: `Uncommitted changes`,
+        description: `${status.files.filter(f => f.status !== "untracked").length} tracked file(s) have uncommitted changes. Stash them and switch to ${target}?`,
+        confirmLabel: "Stash & switch",
+      })) await runAction("switchBranch", { branch: target, stash: true })
+    } else void runAction("switchBranch", { branch: target })
   }
 
   const confirmDeleteBranch = async (force: boolean) => {
@@ -359,19 +364,22 @@ export function HunkApp() {
 
   // --- Sync & commit tools ---------------------------------------------------
 
-  const requestPull = (rebase: boolean) => {
+  const requestPull = async (rebase: boolean) => {
     setForcePushOpen(false)
-    if (buffer.entries.some(b => b.dirty) && !window.confirm("Open tabs have unsaved changes. Pull anyway?")) return
+    if (buffer.entries.some(b => b.dirty) && !(await confirm.ask({
+      title: "Pull?",
+      description: "Open tabs have unsaved changes. They'll be lost when the working tree updates.",
+      confirmLabel: "Pull anyway",
+      destructive: true,
+    }))) return
     // git refuses to pull over tracked changes — offer to stash them.
-    if (status.files.some(f => f.status !== "untracked")) pullDialog.show({ rebase })
-    else void runAction("pull", { rebase })
-  }
-
-  const confirmPull = async () => {
-    const request = pullDialog.value
-    if (!request) return
-    pullDialog.setOpen(false)
-    await runAction("pull", { rebase: request.rebase, stash: true })
+    if (status.files.some(f => f.status !== "untracked")) {
+      if (await confirm.ask({
+        title: "Uncommitted changes",
+        description: `Stash your changes and ${rebase ? "rebase onto" : "fast-forward to"} the upstream?`,
+        confirmLabel: "Stash & pull",
+      })) await runAction("pull", { rebase, stash: true })
+    } else void runAction("pull", { rebase })
   }
 
   const forcePush = async () => {
@@ -380,23 +388,39 @@ export function HunkApp() {
   }
 
   const amend = async (message: string) => {
-    if (headPushed && !window.confirm(
-      `"${repoState.headSubject}" is already pushed to ${repoState.upstream}. Amending rewrites it, so you'd have to force push. Amend anyway?`
-    )) return false
+    if (headPushed && !(await confirm.ask({
+      title: "Amend a pushed commit?",
+      description: `"${repoState.headSubject}" is already pushed to ${repoState.upstream}. Amending rewrites it, so you'd have to force push.`,
+      confirmLabel: "Amend anyway",
+      destructive: true,
+    }))) return false
     return runAction("amend", { message })
   }
 
-  const runCommitAction = (kind: CommitActionKind, commit: Commit) => {
+  const runCommitAction = async (kind: CommitActionKind, commit: Commit) => {
     const label = `${commit.shortSha} "${commit.subject}"`
     if (kind === "undoCommit") {
-      const pushed = headPushed ? `\n\nIt's already pushed to ${repoState.upstream} — undoing it rewrites published history.` : ""
-      if (!window.confirm(`Undo the last commit, ${label}? Its changes stay staged.${pushed}`)) return
+      const pushed = headPushed ? ` It's already pushed to ${repoState.upstream} — undoing it rewrites published history.` : ""
+      if (!(await confirm.ask({
+        title: "Undo the last commit?",
+        description: `Undo ${label}? Its changes stay staged.${pushed}`,
+        confirmLabel: "Undo commit",
+        destructive: headPushed,
+      }))) return
       void runAction("undoCommit", { sha: commit.sha })
     } else if (kind === "revert") {
-      if (!window.confirm(`Revert ${label}? This adds a new commit that undoes its changes.`)) return
+      if (!(await confirm.ask({
+        title: "Revert this commit?",
+        description: `Revert ${label}? This adds a new commit that undoes its changes.`,
+        confirmLabel: "Revert",
+      }))) return
       void runAction("revert", { sha: commit.sha })
     } else {
-      if (!window.confirm(`Cherry-pick ${label} onto ${currentBranch}?`)) return
+      if (!(await confirm.ask({
+        title: "Cherry-pick this commit?",
+        description: `Cherry-pick ${label} onto ${currentBranch}?`,
+        confirmLabel: "Cherry-pick",
+      }))) return
       void runAction("cherryPick", { sha: commit.sha })
     }
   }
@@ -409,19 +433,29 @@ export function HunkApp() {
     isOnBranch: sha => sha === repoState.head || (!history.ref && history.commits.some(c => c.sha === sha)),
   }
 
-  const abortOperation = () => {
+  const abortOperation = async () => {
     const op = repoState.operation
     if (!op) return
-    if (!window.confirm(`Abort the ${op}? Your branch and files go back to how they were before it started — conflict resolutions are lost.`)) return
+    if (!(await confirm.ask({
+      title: `Abort the ${op}?`,
+      description: "Your branch and files go back to how they were before it started — conflict resolutions are lost.",
+      confirmLabel: "Abort",
+      destructive: true,
+    }))) return
     void runAction("abortOperation")
   }
 
   // --- Tabs, find, repo switching ------------------------------------------
 
-  const requestClose = useCallback((entry: BufferEntry) => {
-    if (entry.dirty && !window.confirm("Discard unsaved changes?")) return
+  const requestClose = useCallback(async (entry: BufferEntry) => {
+    if (entry.dirty && !(await askConfirm({
+      title: "Discard unsaved changes?",
+      description: `Close ${entry.commit ? `commit ${entry.commit.slice(0, 7)}` : entry.file} without saving?`,
+      confirmLabel: "Discard & close",
+      destructive: true,
+    }))) return
     buffer.close(entry.id)
-  }, [buffer])
+  }, [buffer, askConfirm])
 
   const openFind = useCallback(() => {
     if (!active || active.commit || conflicted) return
@@ -431,9 +465,14 @@ export function HunkApp() {
 
   // Points the app at another worktree (of the current project by default).
   // Resolves to false when the user kept their unsaved tabs instead.
-  const switchRepo = (next: string, project = projectDir): boolean => {
+  const switchRepo = async (next: string, project = projectDir): Promise<boolean> => {
     if (next === repoPath && project === projectDir) return true
-    if (buffer.entries.some(b => b.dirty) && !window.confirm("Discard unsaved changes in open tabs?")) return false
+    if (buffer.entries.some(b => b.dirty) && !(await confirm.ask({
+      title: "Switch repository?",
+      description: "Open tabs have unsaved changes. They'll be lost.",
+      confirmLabel: "Discard & switch",
+      destructive: true,
+    }))) return false
     setProjectDir(project)
     setRepoPath(next)
     // Branch names belong to the old repo.
@@ -457,7 +496,7 @@ export function HunkApp() {
     const target = removeWorktreeDialog.value
     const main = worktrees.worktrees.find(w => w.main)
     if (!target || !main) return
-    if (samePath(target.path, repoPath) && !switchRepo(main.path)) return
+    if (samePath(target.path, repoPath) && !(await switchRepo(main.path))) return
     removeWorktreeDialog.setOpen(false)
     await runAction("removeWorktree", { path: target.path, force })
   }
@@ -525,9 +564,13 @@ export function HunkApp() {
       buffer.update(active.id, { editContent: next, dirty: next !== active.raw })
     },
     revertResolutions: entry => buffer.update(entry.id, { editContent: "", dirty: false }),
-    markResolved: entry => {
+    markResolved: async entry => {
       const left = countConflicts(parseConflicts(entry.raw))
-      if (left > 0 && !window.confirm(`This file still has ${left} conflict${left > 1 ? "s" : ""}. Mark it as resolved anyway?`)) return
+      if (left > 0 && !(await confirm.ask({
+        title: "Mark as resolved?",
+        description: `This file still has ${left} conflict${left > 1 ? "s" : ""}. Mark it as resolved anyway?`,
+        confirmLabel: "Mark resolved",
+      }))) return
       void runAction("add", { files: [entry.file] })
     },
   }
@@ -608,8 +651,13 @@ export function HunkApp() {
                 onView={s => openCommit(s.sha)}
                 onApply={s => void runAction("stashApply", { index: s.index })}
                 onPop={s => void runAction("stashPop", { index: s.index })}
-                onDrop={s => {
-                  if (window.confirm(`Drop stash@{${s.index}}? This can't be undone.`)) void runAction("stashDrop", { index: s.index })
+                onDrop={async s => {
+                  if (await confirm.ask({
+                    title: "Drop stash?",
+                    description: `Drop stash@{${s.index}}? This can't be undone.`,
+                    confirmLabel: "Drop stash",
+                    destructive: true,
+                  })) void runAction("stashDrop", { index: s.index })
                 }}
               />
             </>
@@ -710,6 +758,7 @@ export function HunkApp() {
           busy={busyAction === "delete"}
           onConfirm={confirmDelete}
         />
+        <ConfirmDialog open={confirm.open} request={confirm.request} onConfirm={confirm.confirm} onOpenChange={confirm.onOpenChange} />
         <DiscardDialog
           open={discardDialog.open}
           onOpenChange={discardDialog.setOpen}
@@ -725,26 +774,12 @@ export function HunkApp() {
           busy={busyAction === "addWorktree"}
           onCreate={addWorktree}
         />
-        <SwitchBranchDialog
-          open={switchBranchDialog.open}
-          onOpenChange={switchBranchDialog.setOpen}
-          branch={switchBranchDialog.value}
-          busy={busyAction === "switchBranch"}
-          onConfirm={confirmSwitchBranch}
-        />
         <DeleteBranchDialog
           open={deleteBranchDialog.open}
           onOpenChange={deleteBranchDialog.setOpen}
           branch={deleteBranchDialog.value}
           busy={busyAction === "deleteBranch"}
           onConfirm={confirmDeleteBranch}
-        />
-        <PullStashDialog
-          open={pullDialog.open}
-          onOpenChange={pullDialog.setOpen}
-          rebase={pullDialog.value?.rebase ?? false}
-          busy={busyAction === "pull"}
-          onConfirm={confirmPull}
         />
         <ForcePushDialog
           open={forcePushOpen}

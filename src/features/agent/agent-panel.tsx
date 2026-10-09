@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { ArrowDown, Bot, Loader2, Plus, RefreshCw, Trash2, X, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog, useConfirm } from "@/components/ui/confirm-dialog"
 import { cn } from "@/lib/utils"
 import { ChatItemView } from "./chat-items"
 import { PromptBox } from "./prompt-box"
@@ -82,14 +83,25 @@ export function AgentPanel({ agent, repo, files, changedFiles, activeFile, onOpe
   onClose: () => void
 }) {
   const { state } = agent.transcript
+  const confirm = useConfirm()
 
-  const toggleAuto = () => {
-    if (!state.autoApprove && !window.confirm("Auto mode: the agent will run commands and edit files without asking. Continue?")) return
+  const toggleAuto = async () => {
+    if (!state.autoApprove && !(await confirm.ask({
+      title: "Turn on auto mode?",
+      description: "The agent will run commands and edit files without asking.",
+      confirmLabel: "Turn on",
+      destructive: true,
+    }))) return
     void agent.setAutoApprove(!state.autoApprove)
   }
 
-  const closeSession = () => {
-    if (window.confirm("Close this session? The agent stops working on it.")) void agent.closeSession()
+  const closeSession = async () => {
+    if (await confirm.ask({
+      title: "Close this session?",
+      description: "The agent stops working on it.",
+      confirmLabel: "Close session",
+      destructive: true,
+    })) void agent.closeSession()
   }
 
   return (
@@ -166,6 +178,7 @@ export function AgentPanel({ agent, repo, files, changedFiles, activeFile, onOpe
 
       <Messages agent={agent} repo={repo} onOpenFile={onOpenFile} />
       <PromptBox agent={agent} files={files} changedFiles={changedFiles} activeFile={activeFile} />
+      <ConfirmDialog open={confirm.open} request={confirm.request} onConfirm={confirm.confirm} onOpenChange={confirm.onOpenChange} />
     </div>
   )
 }
