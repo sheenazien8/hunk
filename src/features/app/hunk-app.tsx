@@ -9,7 +9,7 @@ import { useAgent } from "@/features/agent/use-agent"
 import { DeleteBranchDialog } from "@/features/branches/branch-dialogs"
 import { BranchPicker } from "@/features/branches/branch-picker"
 import { localNameOf, useBranches } from "@/features/branches/use-branches"
-import { type BufferEntry, type TabKey, commitTabKey, makeTabId } from "@/features/buffer/buffer"
+import { type BufferEntry, type TabKey, commitTabKey, committedStagedTabs, makeTabId } from "@/features/buffer/buffer"
 import { TabBar } from "@/features/buffer/tab-bar"
 import { useBuffer } from "@/features/buffer/use-buffer"
 import { useEditing } from "@/features/buffer/use-editing"
@@ -196,8 +196,13 @@ export function HunkApp() {
       return
     }
     const fresh = await status.loadStatus()
+    // A commit / amend took the staged changes: their staged tabs would keep
+    // showing the old diff, so close them (the unstaged side stays open).
+    const committed = fresh && (action === "commit" || action === "amend") ? committedStagedTabs(buffer.entries, fresh) : []
+    for (const e of committed) buffer.close(e.id)
+    const activeClosed = !!active && committed.some(e => e.id === active.id)
     // Switching branches / stashing changed files under every open tab.
-    if (TREE_ACTIONS.has(action) && active && !active.commit && !active.dirty && !active.editMode) {
+    if (TREE_ACTIONS.has(action) && active && !activeClosed && !active.commit && !active.dirty && !active.editMode) {
       void buffer.fetchEntry(active)
     }
     if (action === "switchBranch" || (action === "createBranch" && payload?.checkout)) void worktrees.load()

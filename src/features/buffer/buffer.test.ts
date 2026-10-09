@@ -4,6 +4,7 @@ import {
   TAB_CAP,
   bufferReducer,
   commitTabKey,
+  committedStagedTabs,
   emptyBuffer,
   newEntry,
   readPersistedBuffer,
@@ -141,5 +142,22 @@ describe("persistence", () => {
   it("ignores malformed data", () => {
     localStorage.setItem(`hunk-tabs-${btoa(repo)}`, "{nope")
     expect(readPersistedBuffer(repo)).toEqual(emptyBuffer)
+  })
+})
+
+describe("committedStagedTabs", () => {
+  it("picks staged tabs whose file has nothing staged any more", () => {
+    const tabs = [
+      entry("a.ts", { staged: true }),
+      entry("b.ts", { staged: true }),
+      entry("a.ts"),
+      entry("c.ts", { staged: true, dirty: true }),
+      { ...newEntry(repo, commitTabKey("abc123")), staged: true },
+    ]
+    const fresh = [
+      { path: "a.ts", staged: false },
+      { path: "b.ts", staged: true },
+    ]
+    expect(committedStagedTabs(tabs, fresh).map(e => e.id)).toEqual([tabs[0].id])
   })
 })

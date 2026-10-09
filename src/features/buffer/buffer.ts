@@ -250,3 +250,11 @@ export function writePersistedBuffer(repo: string, { entries, activeId }: Buffer
     // localStorage may be unavailable / full — best-effort.
   }
 }
+
+// Staged-side tabs left with nothing to show once their changes are committed
+// (commit / amend): the file has no staged entry in the fresh status any more.
+// Commit tabs and tabs with unsaved edits are kept.
+export function committedStagedTabs(entries: BufferEntry[], fresh: { path: string; staged: boolean }[]) {
+  const staged = new Set(fresh.filter(f => f.staged).map(f => f.path))
+  return entries.filter(e => e.staged && !e.commit && !e.dirty && !staged.has(e.file))
+}
