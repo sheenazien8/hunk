@@ -20,6 +20,14 @@ export interface NewWorktree {
   base: string
 }
 
+// Prefill for the add dialog (from the branch picker): which branch, whether
+// to create it, and what to start it from.
+export interface NewWorktreeSeed {
+  branch: string
+  newBranch: boolean
+  base?: string
+}
+
 function Spinner() {
   return <RefreshCw size={14} className="animate-spin mr-2" />
 }
@@ -33,8 +41,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-export function AddWorktreeDialog({ open, onOpenChange, mainDir, branches, busy, onCreate }: {
+// Mount with a fresh `key` per opening so the seed is applied.
+export function AddWorktreeDialog({ open, onOpenChange, seed, mainDir, branches, busy, onCreate }: {
   open: boolean
+  seed?: NewWorktreeSeed
   onOpenChange: (open: boolean) => void
   mainDir: string
   branches: string[]
@@ -42,9 +52,9 @@ export function AddWorktreeDialog({ open, onOpenChange, mainDir, branches, busy,
   onCreate: (worktree: NewWorktree) => Promise<boolean>
 }) {
   const listId = useId()
-  const [branch, setBranch] = useState("")
-  const [newBranch, setNewBranch] = useState(true)
-  const [base, setBase] = useState("HEAD")
+  const [branch, setBranch] = useState(seed?.branch ?? "")
+  const [newBranch, setNewBranch] = useState(seed?.newBranch ?? true)
+  const [base, setBase] = useState(seed?.base ?? "HEAD")
   // null = follow the default derived from the branch name.
   const [customPath, setCustomPath] = useState<string | null>(null)
   const path = customPath ?? (branch.trim() ? defaultWorktreePath(mainDir, branch) : "")
@@ -90,7 +100,7 @@ export function AddWorktreeDialog({ open, onOpenChange, mainDir, branches, busy,
               onChange={e => setBranch(e.target.value)}
               list={newBranch ? undefined : listId}
               className="font-mono"
-              autoFocus
+              autoFocus={!seed?.branch}
             />
             <datalist id={listId}>
               {branches.map(b => <option key={b} value={b} />)}
@@ -113,6 +123,7 @@ export function AddWorktreeDialog({ open, onOpenChange, mainDir, branches, busy,
               value={path}
               onChange={e => setCustomPath(e.target.value)}
               className="font-mono"
+              autoFocus={!!seed?.branch}
             />
           </Field>
           {/* Lets Enter submit from any field. */}

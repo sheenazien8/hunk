@@ -38,7 +38,7 @@ import { SyncMenu } from "@/features/sync/sync-menu"
 import { useTheme } from "@/features/theme/theme"
 import { ViewerPanel, type ViewerHandlers } from "@/features/viewer/viewer-panel"
 import { useWorktrees } from "@/features/worktrees/use-worktrees"
-import { AddWorktreeDialog, type NewWorktree, RemoveWorktreeDialog } from "@/features/worktrees/worktree-dialogs"
+import { AddWorktreeDialog, type NewWorktree, type NewWorktreeSeed, RemoveWorktreeDialog } from "@/features/worktrees/worktree-dialogs"
 import { samePath } from "@/features/worktrees/worktrees"
 import { mentionableFiles } from "@/lib/acp/mentions"
 import { countConflicts, parseConflicts, resolveConflict } from "@/lib/git/parse-conflict"
@@ -88,7 +88,10 @@ export function HunkApp() {
   const askConfirm = confirm.ask
   const moveDialog = useDialog<string[]>()
   const discardDialog = useDialog<DiscardRequest>()
-  const [addWorktreeOpen, setAddWorktreeOpen] = useState(false)
+  // Add-worktree dialog: open flag, prefill, and a key so each opening
+  // remounts it with that prefill.
+  const [addWorktree, setAddWorktree] = useState<{ open: boolean; seed?: NewWorktreeSeed; key: number }>({ open: false, key: 0 })
+  const showAddWorktree = (seed?: NewWorktreeSeed) => setAddWorktree(prev => ({ open: true, seed, key: prev.key + 1 }))
   const removeWorktreeDialog = useDialog<Worktree>()
   const history = useHistory(repoPath)
   const branches = useBranches(repoPath)
@@ -502,7 +505,7 @@ export function HunkApp() {
     return true
   }
 
-  const addWorktree = async (w: NewWorktree) => {
+  const createWorktree = async (w: NewWorktree) => {
     if (!(await runAction("addWorktree", { ...w }))) return false
     switchRepo(w.path)
     return true
@@ -652,6 +655,8 @@ export function HunkApp() {
                 onCreate={branch => void runAction("createBranch", { branch, checkout: true })}
                 onDelete={deleteBranchDialog.show}
                 onHistory={showBranchHistory}
+                onOpenWorktree={path => void switchRepo(path)}
+                onNewWorktree={showAddWorktree}
               />
               <SyncMenu
                 branch={currentBranch}
@@ -697,7 +702,7 @@ export function HunkApp() {
           onDiscardAll={() => discardDialog.show({ action: "discardAll" })}
           onProjectChange={dir => switchRepo(dir, dir)}
           onWorktreeChange={path => switchRepo(path)}
-          onAddWorktree={() => setAddWorktreeOpen(true)}
+          onAddWorktree={() => showAddWorktree()}
           onRemoveWorktree={removeWorktreeDialog.show}
           onRefresh={() => void status.loadStatus()}
           onCommit={message => runAction("commit", { message })}
@@ -786,12 +791,14 @@ export function HunkApp() {
           onConfirm={confirmDiscard}
         />
         <AddWorktreeDialog
-          open={addWorktreeOpen}
-          onOpenChange={setAddWorktreeOpen}
+          key={addWorktree.key}
+          open={addWorktree.open}
+          onOpenChange={open => setAddWorktree(prev => ({ ...prev, open }))}
+          seed={addWorktree.seed}
           mainDir={worktrees.worktrees.find(w => w.main)?.path ?? projectDir}
           branches={worktrees.branches}
           busy={busyAction === "addWorktree"}
-          onCreate={addWorktree}
+          onCreate={createWorktree}
         />
         <DeleteBranchDialog
           open={deleteBranchDialog.open}

@@ -1,7 +1,9 @@
 import { useState } from "react"
-import { ArrowDown, ArrowUp, Check, ChevronDown, Cloud, FolderGit2, GitBranch, GitBranchPlus, History, Search, Trash2 } from "lucide-react"
-import { usePopover } from "@/hooks/use-popover"
+import { ArrowDown, ArrowUp, Check, ChevronDown, Cloud, FolderGit2, FolderPlus, GitBranch, GitBranchPlus, History, Search, Trash2 } from "lucide-react"
+import { moveOptionFocus, usePopover } from "@/hooks/use-popover"
+import type { NewWorktreeSeed } from "@/features/worktrees/worktree-dialogs"
 import type { Branch } from "@/lib/git/types"
+import { localNameOf } from "./use-branches"
 import { cn } from "@/lib/utils"
 
 function Group({ label, children }: { label: string; children: React.ReactNode }) {
@@ -15,18 +17,22 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
 
 const rowCls = "group flex w-full min-w-0 items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent focus:bg-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 
-function BranchRow({ branch, otherWorktree, onSwitch, onHistory, onDelete }: {
+const iconBtn = "ml-0.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+
+function BranchRow({ branch, otherWorktree, onSwitch, onHistory, onNewWorktree, onDelete }: {
   branch: Branch
-  // Checked out in another worktree: git won't switch to it here.
+  // Checked out in another worktree: git won't switch to it here, so
+  // choosing it opens that worktree instead.
   otherWorktree: boolean
   onSwitch: () => void
   onHistory: () => void
+  onNewWorktree?: () => void
   onDelete?: () => void
 }) {
   const tip = [
     branch.name,
     branch.upstream && `tracks ${branch.upstream}`,
-    otherWorktree && `checked out in ${branch.worktree}`,
+    otherWorktree && `checked out in ${branch.worktree} — click to open that worktree`,
     `${branch.shortSha} ${branch.subject}`,
   ].filter(Boolean).join("\n")
   return (
@@ -35,7 +41,7 @@ function BranchRow({ branch, otherWorktree, onSwitch, onHistory, onDelete }: {
         type="button"
         role="option"
         aria-selected={branch.current}
-        disabled={branch.current || otherWorktree}
+        disabled={branch.current}
         onClick={onSwitch}
         title={tip}
         className={cn(rowCls, branch.current && "font-medium disabled:opacity-100")}
@@ -48,12 +54,23 @@ function BranchRow({ branch, otherWorktree, onSwitch, onHistory, onDelete }: {
         {branch.ahead > 0 && <span className="flex shrink-0 items-center text-[10px] text-muted-foreground"><ArrowUp size={10} />{branch.ahead}</span>}
         {branch.behind > 0 && <span className="flex shrink-0 items-center text-[10px] text-muted-foreground"><ArrowDown size={10} />{branch.behind}</span>}
       </button>
+      {onNewWorktree && (
+        <button
+          type="button"
+          title={`Check out ${branch.name} in a new worktree…`}
+          aria-label={`New worktree for ${branch.name}`}
+          onClick={onNewWorktree}
+          className={iconBtn}
+        >
+          <FolderPlus size={12} />
+        </button>
+      )}
       <button
         type="button"
         title={`Show the history of ${branch.name}`}
         aria-label={`History of ${branch.name}`}
         onClick={onHistory}
-        className="ml-0.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+        className={iconBtn}
       >
         <History size={12} />
       </button>
@@ -73,9 +90,10 @@ function BranchRow({ branch, otherWorktree, onSwitch, onHistory, onDelete }: {
 }
 
 // The current-branch badge in the header, opening a branch list: switch to a
-// local or remote branch, create one from the filter text, delete local ones,
-// or show a branch's history.
-export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwitch, onCreate, onDelete, onHistory }: {
+// local or remote branch (or open the worktree it's checked out in), create
+// one from the filter text — here or in a new worktree — check a branch out
+// in a new worktree, delete local ones, or show a branch's history.
+export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwitch, onCreate, onDelete, onHistory, onOpenWorktree, onNewWorktree }: {
   // Current branch; "" when HEAD is detached.
   current: string
   branches: Branch[]
@@ -86,6 +104,8 @@ export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwit
   onCreate: (branch: string) => void
   onDelete: (branch: string) => void
   onHistory: (branch: string) => void
+  onOpenWorktree: (path: string) => void
+  onNewWorktree: (seed: NewWorktreeSeed) => void
 }) {
   const { open, setOpen, rootRef, triggerRef } = usePopover()
   const [filter, setFilter] = useState("")
@@ -108,6 +128,7 @@ export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwit
   const remote = branches.filter(b => b.remote && match(b))
   const canCreate = !!q && !/\s/.test(q) && !branches.some(b => !b.remote && b.name === q)
   const inOtherWorktree = (b: Branch) => !!b.worktree && !b.current && b.worktree.replace(/\/+$/, "") !== repoPath.replace(/\/+$/, "")
+  const hasLocal = (name: string) => branches.some(b => !b.remote && b.name === name)
 
   return (
     <div ref={rootRef} className="relative min-w-0">
@@ -118,14 +139,18 @@ export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwit
         aria-expanded={open}
         onClick={toggle}
         title={current ? `Branch: ${current}` : "Detached HEAD"}
-        className="flex h-6 max-w-40 items-center gap-1 rounded-md bg-secondary px-2 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 focus:outline-none focus:ring-2 focus:ring-ring sm:max-w-64"
+        className="flex h-7 max-w-36 items-center gap-1.5 rounded-md px-1.5 text-sm hover:bg-accent hover:text-accent-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:max-w-64"
       >
-        <span className="min-w-0 truncate">{current || "detached"}</span>
+        <GitBranch size={14} className="shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate font-mono text-xs">{current || "detached"}</span>
         <ChevronDown size={12} className={cn("shrink-0 transition-transform", open && "rotate-180")} />
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 flex max-h-[60vh] w-72 flex-col rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
+        <div
+          onKeyDown={moveOptionFocus}
+          className="fixed inset-x-3 top-14 z-50 flex max-h-[70vh] sm:absolute sm:inset-x-auto sm:left-0 sm:top-full sm:mt-1 sm:w-80 flex-col rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
+        >
           <form
             className="relative border-b border-border p-1.5"
             onSubmit={e => {
@@ -144,10 +169,24 @@ export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwit
           </form>
           <div role="listbox" aria-label="Branches" className="min-h-0 flex-1 overflow-y-auto p-1">
             {canCreate && (
-              <button type="button" disabled={busy} onClick={() => run(() => onCreate(q))} className={rowCls}>
-                <GitBranchPlus size={12} className="shrink-0 text-primary" />
-                <span className="min-w-0 flex-1 truncate">Create <span className="font-mono">{q}</span> from {current || "HEAD"}</span>
-              </button>
+              <>
+                <button type="button" role="option" aria-selected={false} disabled={busy} onClick={() => run(() => onCreate(q))} className={rowCls}>
+                  <GitBranchPlus size={12} className="shrink-0 text-primary" />
+                  <span className="min-w-0 flex-1 truncate">Create <span className="font-mono">{q}</span> from {current || "HEAD"}</span>
+                  <kbd className="shrink-0 text-[10px] text-muted-foreground">↵</kbd>
+                </button>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  disabled={busy}
+                  onClick={() => run(() => onNewWorktree({ branch: q, newBranch: true }))}
+                  className={rowCls}
+                >
+                  <FolderPlus size={12} className="shrink-0 text-primary" />
+                  <span className="min-w-0 flex-1 truncate">Create <span className="font-mono">{q}</span> in a new worktree…</span>
+                </button>
+              </>
             )}
             {local.length > 0 && (
               <Group label="Local">
@@ -156,8 +195,12 @@ export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwit
                     key={b.name}
                     branch={b}
                     otherWorktree={inOtherWorktree(b)}
-                    onSwitch={() => !busy && run(() => onSwitch(b.name))}
+                    onSwitch={() => {
+                      if (inOtherWorktree(b)) run(() => onOpenWorktree(b.worktree!))
+                      else if (!busy) run(() => onSwitch(b.name))
+                    }}
                     onHistory={() => run(() => onHistory(b.name))}
+                    onNewWorktree={b.current || b.worktree ? undefined : () => run(() => onNewWorktree({ branch: b.name, newBranch: false }))}
                     onDelete={b.current || b.worktree ? undefined : () => run(() => onDelete(b.name))}
                   />
                 ))}
@@ -172,6 +215,9 @@ export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwit
                     otherWorktree={false}
                     onSwitch={() => !busy && run(() => onSwitch(b.name))}
                     onHistory={() => run(() => onHistory(b.name))}
+                    onNewWorktree={hasLocal(localNameOf(b.name))
+                      ? undefined
+                      : () => run(() => onNewWorktree({ branch: localNameOf(b.name), newBranch: true, base: b.name }))}
                   />
                 ))}
               </Group>
@@ -180,6 +226,14 @@ export function BranchPicker({ current, branches, repoPath, busy, onOpen, onSwit
               <div className="px-2 py-3 text-center text-xs text-muted-foreground">{q ? "No matching branches" : "No branches"}</div>
             )}
           </div>
+          {!canCreate && (
+            <div className="border-t border-border p-1">
+              <button type="button" role="option" aria-selected={false} disabled={busy} onClick={() => run(() => onNewWorktree({ branch: "", newBranch: true }))} className={rowCls}>
+                <FolderPlus size={12} className="shrink-0 text-primary" />
+                <span className="flex-1">New worktree…</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
