@@ -8,7 +8,9 @@ import {
   Loader2, ShieldQuestion, Square, SquareTerminal, Trash2, Wrench, X, Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { DiffView } from "@/features/viewer/diff-view"
+import { imagePlaceholder, isImageType, type ChatImage } from "@/lib/acp/images"
 import { unifiedDiff } from "@/lib/acp/line-diff"
 import { repoRelative, type ChatItem } from "@/lib/acp/transcript"
 import type { ShellResult } from "@/lib/acp/types"
@@ -101,10 +103,46 @@ function DiffBlock({ content, repo, onOpenFile }: { content: Extract<ToolCallCon
   )
 }
 
+// An image from the chat (agent output or an attachment), shown from its
+// own base64 bytes — never from a URL. Click to see it full size.
+function ImageBlock({ image, alt }: { image: ChatImage; alt: string }) {
+  const [open, setOpen] = useState(false)
+  const [broken, setBroken] = useState(false)
+  if (broken || !isImageType(image.mimeType) || !image.data) {
+    return <div className="font-mono text-xs text-muted-foreground">{imagePlaceholder(image.mimeType, image.data, broken ? "can't be shown" : undefined)}</div>
+  }
+  const src = `data:${image.mimeType};base64,${image.data}`
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} title="Show full size" className="block max-w-full overflow-hidden rounded border border-border hover:border-ring">
+        {/* eslint-disable-next-line @next/next/no-img-element -- inline data: URL, nothing for next/image to optimize */}
+        <img src={src} alt={alt} onError={() => setBroken(true)} className="max-h-64 max-w-full object-contain" />
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-h-[95vh] max-w-[95vw] overflow-auto p-2 sm:max-w-[95vw]">
+          <DialogTitle className="sr-only">{alt}</DialogTitle>
+          {/* eslint-disable-next-line @next/next/no-img-element -- inline data: URL */}
+          <img src={src} alt={alt} className="mx-auto h-auto max-w-full" />
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+function ImageList({ images, alt }: { images?: ChatImage[]; alt: string }) {
+  if (!images?.length) return null
+  return (
+    <div className="mt-1 flex flex-wrap gap-2">
+      {images.map((image, i) => <ImageBlock key={i} image={image} alt={images.length > 1 ? `${alt} ${i + 1}` : alt} />)}
+    </div>
+  )
+}
+
 function ToolContent({ content, repo, onOpenFile }: { content: ToolCallContent; repo: string; onOpenFile: (file: string) => void }) {
   if (content.type === "diff") return <DiffBlock content={content} repo={repo} onOpenFile={onOpenFile} />
   if (content.type === "terminal") return <div className="text-xs text-muted-foreground">Terminal {content.terminalId}</div>
   const block = content.content
+  if (block.type === "image") return <ImageBlock image={block} alt="Tool output image" />
   const text = block.type === "text" ? block.text : block.type === "resource_link" ? block.uri : `[${block.type}]`
   return <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 font-mono text-xs">{text}</pre>
 }
@@ -209,7 +247,7 @@ function ShellBlock({ item, onStop }: { item: Extract<ChatItem, { kind: "shell" 
   )
 }
 
-function ThoughtBlock({ text }: { text: string }) {
+function ThoughtBlock({ text, images }: { text: string; images?: ChatImage[] }) {
   const [open, setOpen] = useState(false)
   return (
     <Collapsible
@@ -222,7 +260,8 @@ function ThoughtBlock({ text }: { text: string }) {
         </>
       }
     >
-      <div className="whitespace-pre-wrap break-words text-xs italic text-muted-foreground">{text}</div>
+      {text && <div className="whitespace-pre-wrap break-words text-xs italic text-muted-foreground">{text}</div>}
+      <ImageList images={images} alt="Agent thought image" />
     </Collapsible>
   )
 }
@@ -292,17 +331,19 @@ export const ChatItemView = memo(function ChatItemView({ item, repo, onOpenFile,
     case "user":
       return (
         <Row label="You" border="border-primary">
-          <div className="whitespace-pre-wrap break-words text-sm">{item.text}</div>
+          {item.text && <div className="whitespace-pre-wrap break-words text-sm">{item.text}</div>}
+          <ImageList images={item.images} alt="Attached image" />
         </Row>
       )
     case "agent":
       return (
         <Row label="Agent" border="border-border">
-          <AgentMarkdown text={item.text} />
+          {item.text && <AgentMarkdown text={item.text} />}
+          <ImageList images={item.images} alt="Agent image" />
         </Row>
       )
     case "thought":
-      return <ThoughtBlock text={item.text} />
+      return <ThoughtBlock text={item.text} images={item.images} />
     case "tool":
       return <ToolBlock item={item} repo={repo} onOpenFile={onOpenFile} />
     case "plan":

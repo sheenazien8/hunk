@@ -1,10 +1,13 @@
 import type { PermissionOption, PlanEntry, StopReason, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolKind } from "@agentclientprotocol/sdk"
+import type { ChatImage } from "./images"
 import type { AcpEvent, SeqEvent, SessionConfig, SessionState, ShellResult } from "./types"
 
 // Folds a session's event log into the chat items the panel renders.
 
 export type ChatItem =
-  | { kind: "user" | "agent" | "thought"; id: string; text: string; messageId?: string }
+  // `images` render after the text. An image starts a new item, so text
+  // that follows it stays below it.
+  | { kind: "user" | "agent" | "thought"; id: string; text: string; messageId?: string; images?: ChatImage[] }
   | {
       kind: "tool"
       id: string
@@ -53,7 +56,7 @@ export interface Transcript {
 export function emptyTranscript(): Transcript {
   return {
     items: [],
-    state: { title: "", busy: false, autoApprove: false, connected: true },
+    state: { title: "", busy: false, autoApprove: false, connected: true, images: false },
     config: { configOptions: [], modes: null, usage: null },
     lastSeq: 0,
   }
@@ -77,12 +80,18 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
     return -1
   }
 
-  const appendText = (kind: "user" | "agent" | "thought", text: string, messageId: string | undefined, id: string) => {
+  // Same kind (and message) as the last item: text joins it unless it ends
+  // in images; images join it.
+  const appendChunk = (kind: "user" | "agent" | "thought", chunk: { text: string } | { image: ChatImage }, messageId: string | undefined, id: string) => {
     const prev = last()
-    if (prev && prev.kind === kind && (!messageId || !prev.messageId || prev.messageId === messageId)) {
-      replaceLast({ ...prev, text: prev.text + text, messageId: prev.messageId ?? messageId })
+    const same = prev && prev.kind === kind && (!messageId || !prev.messageId || prev.messageId === messageId)
+    if ("image" in chunk) {
+      if (same) replaceLast({ ...prev, images: [...(prev.images ?? []), chunk.image], messageId: prev.messageId ?? messageId })
+      else items.push({ kind, id, text: "", messageId, images: [chunk.image] })
+    } else if (same && !prev.images?.length) {
+      replaceLast({ ...prev, text: prev.text + chunk.text, messageId: prev.messageId ?? messageId })
     } else {
-      items.push({ kind, id, text, messageId })
+      items.push({ kind, id, text: chunk.text, messageId })
     }
   }
 
@@ -108,7 +117,7 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
         config = event.config
         break
       case "user_prompt":
-        items.push({ kind: "user", id, text: event.text })
+        items.push(event.images?.length ? { kind: "user", id, text: event.text, images: event.images } : { kind: "user", id, text: event.text })
         break
       case "turn_end":
         items.push({ kind: "turn_end", id, stopReason: event.stopReason })
@@ -159,8 +168,11 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
           case "agent_message_chunk":
           case "agent_thought_chunk": {
             const kind = u.sessionUpdate === "user_message_chunk" ? "user" : u.sessionUpdate === "agent_message_chunk" ? "agent" : "thought"
-            const text = u.content.type === "text" ? u.content.text : u.content.type === "resource_link" ? `[${u.content.name}](${u.content.uri})` : `[${u.content.type}]`
-            appendText(kind, text, u.messageId ?? undefined, id)
+            const c = u.content
+            const chunk = c.type === "image"
+              ? { image: { data: c.data, mimeType: c.mimeType } }
+              : { text: c.type === "text" ? c.text : c.type === "resource_link" ? `[${c.name}](${c.uri})` : `[${c.type}]` }
+            appendChunk(kind, chunk, u.messageId ?? undefined, id)
             break
           }
           case "tool_call": {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ToolKind } from "@agentclientprotocol/sdk"
 import { api } from "@/lib/api-client"
+import type { ChatImage } from "@/lib/acp/images"
 import { applyEvents, emptyTranscript, touchesFiles, type Transcript } from "@/lib/acp/transcript"
 import type { AcpAction, AcpEvent, AgentInfo, SeqEvent } from "@/lib/acp/types"
 
@@ -199,11 +200,11 @@ export function useAgent(repo: string, enabled: boolean, onFilesChanged: () => v
     }
   }, [sessionId])
 
-  const send = useCallback(async (text: string, files: string[] = []) => {
+  const send = useCallback(async (text: string, files: string[] = [], images: ChatImage[] = []) => {
     setPending("send")
     setError("")
     try {
-      return await act({ action: "prompt", text, files })
+      return await act(images.length > 0 ? { action: "prompt", text, files, images } : { action: "prompt", text, files })
     } finally {
       setPending(null)
     }

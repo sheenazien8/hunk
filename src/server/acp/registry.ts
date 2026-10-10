@@ -1,6 +1,7 @@
 import "server-only"
 import { pathToFileURL } from "url"
 import type { ContentBlock, SessionInfo } from "@agentclientprotocol/sdk"
+import { base64Bytes, capUpdateImages, formatBytes, isImageType, MAX_IMAGE_BYTES, MAX_PROMPT_IMAGE_CHARS, MAX_PROMPT_IMAGES, sniffImageType, type ChatImage } from "@/lib/acp/images"
 import type { AcpAction, AgentSessionSummary } from "@/lib/acp/types"
 import { HttpError } from "../http"
 import { pluginAgentEnv, pluginMcpServers } from "../plugins/mcp"
@@ -66,7 +67,7 @@ async function getProcess(agent: AgentConfig, repo: string): Promise<AgentProces
     sessionUpdate: params => {
       const session = registry.sessions.get(params.sessionId)
       if (!session) return
-      const u = params.update
+      const u = capUpdateImages(params.update)
       if (u.sessionUpdate === "session_info_update" && u.title) session.setTitle(u.title)
       session.trackConfig(u)
       session.push({ type: "update", update: u })
@@ -175,6 +176,7 @@ export async function openSession(repo: string, agentId: string | null, resumeId
     const mcpServers = await pluginMcpServers(repo, proc.capabilities)
     const res = await proc.connection.newSession({ cwd: repo, mcpServers })
     const session = new AgentSession(res.sessionId, agent.id, repo)
+    session.images = !!proc.capabilities.promptCapabilities?.image
     registry.sessions.set(session.id, session)
     session.setConfig(res.configOptions, res.modes)
     session.pushState()
@@ -187,6 +189,7 @@ export async function openSession(repo: string, agentId: string | null, resumeId
   }
   // Registered before loading so replayed updates land in its log.
   const session = new AgentSession(resumeId, agent.id, repo)
+  session.images = !!caps.promptCapabilities?.image
   registry.sessions.set(resumeId, session)
   try {
     const mcpServers = await pluginMcpServers(repo, caps)
@@ -218,24 +221,54 @@ function titleFrom(text: string): string {
   return line.length > TITLE_MAX ? line.slice(0, TITLE_MAX - 1) + "…" : line
 }
 
-// The prompt text plus one resource link per mentioned file. Every ACP
-// agent must accept resource links; paths are checked to stay in the repo.
-export function promptBlocks(repo: string, text: string, files: unknown): ContentBlock[] {
+// Attached images from a request: user-supplied bytes, so the check is on
+// the format (allowlisted type that matches the bytes) and size. They go
+// straight to the agent, never to disk.
+export function promptImages(images: unknown): ChatImage[] {
+  if (images === undefined || images === null) return []
+  if (!Array.isArray(images)) throw new HttpError(400, "Invalid images")
+  if (images.length > MAX_PROMPT_IMAGES) throw new HttpError(400, `At most ${MAX_PROMPT_IMAGES} images per prompt`)
+  let total = 0
+  return images.map((image: unknown, i) => {
+    const { data, mimeType } = (image ?? {}) as Partial<ChatImage>
+    const label = `Image ${i + 1}`
+    if (typeof data !== "string" || typeof mimeType !== "string") throw new HttpError(400, `${label} is invalid`)
+    if (!isImageType(mimeType)) throw new HttpError(400, `${label}: ${mimeType} isn't supported (PNG, JPEG, GIF or WebP)`)
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 !== 0) throw new HttpError(400, `${label} isn't valid base64`)
+    const bytes = base64Bytes(data)
+    if (bytes > MAX_IMAGE_BYTES) throw new HttpError(400, `${label} is ${formatBytes(bytes)} (max ${formatBytes(MAX_IMAGE_BYTES)})`)
+    total += data.length
+    if (total > MAX_PROMPT_IMAGE_CHARS) throw new HttpError(400, "The attached images are too large together")
+    if (sniffImageType(Buffer.from(data.slice(0, 24), "base64")) !== mimeType) throw new HttpError(400, `${label} isn't really ${mimeType}`)
+    return { data, mimeType }
+  })
+}
+
+// The prompt text, one resource link per mentioned file and one image
+// block per attached image. Every ACP agent must accept resource links;
+// paths are checked to stay in the repo.
+export function promptBlocks(repo: string, text: string, files: unknown, images: ChatImage[] = []): ContentBlock[] {
   const list = Array.isArray(files) ? files : []
   if (list.length > MAX_PROMPT_FILES) throw new HttpError(400, `At most ${MAX_PROMPT_FILES} files per prompt`)
-  const blocks: ContentBlock[] = [{ type: "text", text }]
+  const blocks: ContentBlock[] = text.trim() || images.length === 0 ? [{ type: "text", text }] : []
   const seen = new Set<string>()
   for (const file of list) {
     if (typeof file !== "string" || seen.has(file)) continue
     seen.add(file)
     blocks.push({ type: "resource_link", name: file, uri: pathToFileURL(resolveInRepo(repo, file)).href })
   }
+  for (const image of images) blocks.push({ type: "image", data: image.data, mimeType: image.mimeType })
   return blocks
 }
 
-async function prompt(session: AgentSession, text: string, files?: unknown) {
-  if (!text.trim()) throw new HttpError(400, "Prompt is empty")
-  const blocks = promptBlocks(session.repo, text, files)
+async function prompt(session: AgentSession, text: string, files?: unknown, rawImages?: unknown) {
+  const images = promptImages(rawImages)
+  if (!text.trim() && images.length === 0) throw new HttpError(400, "Prompt is empty")
+  if (images.length > 0 && !session.images) {
+    const agent = await findAgent(session.agentId)
+    throw new HttpError(400, `${agent.name} doesn't accept images`)
+  }
+  const blocks = promptBlocks(session.repo, text, files, images)
   if (session.busy) throw new HttpError(409, "The agent is still working on the previous prompt")
   const proc = await processOf(session)
   // `!` commands run since the last prompt go first, once.
@@ -244,8 +277,8 @@ async function prompt(session: AgentSession, text: string, files?: unknown) {
     session.sharedShell = []
   }
   session.busy = true
-  if (session.title === DEFAULT_TITLE) session.title = titleFrom(text)
-  session.push({ type: "user_prompt", text })
+  if (session.title === DEFAULT_TITLE) session.title = titleFrom(text) || "Image"
+  session.push(images.length > 0 ? { type: "user_prompt", text, images } : { type: "user_prompt", text })
   session.pushState()
   // The turn runs in the background; the browser follows it over SSE.
   proc.connection.prompt({ sessionId: session.id, prompt: blocks })
@@ -301,7 +334,7 @@ async function cancel(session: AgentSession) {
 export async function runAction(session: AgentSession, action: AcpAction): Promise<void> {
   switch (action.action) {
     case "prompt":
-      return prompt(session, action.text, action.files)
+      return prompt(session, action.text, action.files, action.images)
     case "cancel":
       return cancel(session)
     case "permission":

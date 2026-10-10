@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { AtSign, EyeOff, FileCode, FileDiff, Loader2, Send, Square, SquareTerminal, X } from "lucide-react"
+import { AtSign, EyeOff, FileCode, FileDiff, ImagePlus, Loader2, Send, Square, SquareTerminal, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { base64Bytes, formatBytes, MAX_PROMPT_IMAGE_CHARS, MAX_PROMPT_IMAGES, type ChatImage } from "@/lib/acp/images"
 import { extractMentions, insertMention, mentionAt, rankFiles, removeMention } from "@/lib/acp/mentions"
 import { parsePromptInput } from "@/lib/acp/shell-prefix"
 import { cn } from "@/lib/utils"
 import { ConfigBar } from "./config-bar"
+import { IMAGE_ACCEPT, imageFiles, prepareImage } from "./image-attach"
 import type { Agent } from "./use-agent"
 
 const PROMPT_HEIGHT_KEY = "hunk-agent-prompt-height"
@@ -96,8 +98,56 @@ function fileName(path: string) {
   return path.slice(path.lastIndexOf("/") + 1)
 }
 
+interface Attachment extends ChatImage {
+  id: number
+  name: string
+}
+
+let nextAttachmentId = 1
+
+// Images attached to the next prompt (paste, drop or the file picker),
+// already downscaled and re-encoded.
+function useAttachments() {
+  const [images, setImages] = useState<Attachment[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  const add = useCallback(async (files: File[], current: Attachment[]) => {
+    if (files.length === 0) return
+    setError("")
+    if (current.length + files.length > MAX_PROMPT_IMAGES) {
+      setError(`At most ${MAX_PROMPT_IMAGES} images per message`)
+      return
+    }
+    setBusy(true)
+    try {
+      let chars = current.reduce((n, img) => n + img.data.length, 0)
+      const added: Attachment[] = []
+      for (const file of files) {
+        const image = await prepareImage(file)
+        chars += image.data.length
+        if (chars > MAX_PROMPT_IMAGE_CHARS) throw new Error("The attached images are too large together")
+        added.push({ ...image, id: nextAttachmentId++, name: file.name || "pasted image" })
+      }
+      setImages(list => [...list, ...added])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  const remove = (id: number) => setImages(list => list.filter(img => img.id !== id))
+  const clear = () => {
+    setImages([])
+    setError("")
+  }
+  return { images, busy, error, add, remove, clear }
+}
+
 // Prompt input: `!cmd` / `!!cmd` run a shell command (shared with the agent
 // on the next prompt / private), @-mention files (sent to the agent as resource links),
+// attach images (paste, drop or pick; only when the agent takes them),
 // quick buttons to mention the open file or all changed files, chips for
 // what will be attached, a drag handle for its height, and below it the
 // agent's settings (model, thinking, mode…) with context usage.
@@ -119,6 +169,9 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
   const { busy, connected } = agent.transcript.state
   const disabled = !agent.sessionId || agent.streamStatus === "closed" || !connected
   const { height, isResizing, startResize, reset, boxRef } = usePromptHeight()
+  const attachments = useAttachments()
+  const pickerRef = useRef<HTMLInputElement>(null)
+  const canAttach = !disabled && agent.transcript.state.images
 
   useEffect(() => {
     if (agent.sessionId) boxRef.current?.focus()
@@ -127,7 +180,9 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
   const input = useMemo(() => parsePromptInput(text), [text])
   const isShell = input.kind === "shell"
   const shellRunning = agent.transcript.items.some(item => item.kind === "shell" && !item.result)
-  const canSend = !disabled && agent.pending !== "send" && (input.kind === "shell" ? !!input.command && !shellRunning : !!input.text && !busy)
+  const canSend = !disabled && agent.pending !== "send" && (input.kind === "shell"
+    ? !!input.command && !shellRunning
+    : (!!input.text || attachments.images.length > 0) && !busy && !attachments.busy)
 
   const known = useMemo(() => new Set([...files, ...changedFiles]), [files, changedFiles])
   const attached = useMemo(() => extractMentions(text, known), [text, known])
@@ -176,11 +231,13 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
 
   const send = async () => {
     if (!canSend) return
-    const ok = input.kind === "shell" ? await agent.runShell(input.command, input.share) : await agent.send(input.text, attached)
+    const images = attachments.images.map(({ data, mimeType }) => ({ data, mimeType }))
+    const ok = input.kind === "shell" ? await agent.runShell(input.command, input.share) : await agent.send(input.text, attached, images)
     if (ok) {
       setText("")
       setCaret(0)
       setDismissedAt(null)
+      if (input.kind !== "shell") attachments.clear()
     }
   }
 
@@ -213,8 +270,29 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
 
   const trackCaret = (e: React.SyntheticEvent<HTMLTextAreaElement>) => setCaret(e.currentTarget.selectionStart)
 
+  const attach = (files: File[]) => void attachments.add(files, attachments.images)
+
+  // Pasted images attach (when the agent takes them); text pastes as usual.
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = imageFiles(e.clipboardData.items)
+    if (files.length === 0 || !canAttach) return
+    e.preventDefault()
+    attach(files)
+  }
+
+  const onDragOver = (e: React.DragEvent) => {
+    if (canAttach && Array.from(e.dataTransfer.items).some(i => i.kind === "file")) e.preventDefault()
+  }
+
+  const onDrop = (e: React.DragEvent) => {
+    const files = imageFiles(e.dataTransfer.files)
+    if (files.length === 0 || !canAttach) return
+    e.preventDefault()
+    attach(files)
+  }
+
   return (
-    <div className="border-t border-border">
+    <div className="border-t border-border" onDragOver={onDragOver} onDrop={onDrop}>
       {/* Drag handle: resize the prompt box (double-click resets to 5 rows) */}
       <div
         onPointerDown={startResize}
@@ -239,7 +317,54 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
           disabled={disabled || changedFiles.length === 0}
           onClick={() => mentionFiles(changedFiles)}
         />
+        {agent.transcript.state.images && (
+          <>
+            <ToolButton
+              icon={attachments.busy ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
+              label="Image"
+              title="Attach an image (or paste / drop one)"
+              disabled={!canAttach || attachments.busy}
+              onClick={() => pickerRef.current?.click()}
+            />
+            <input
+              ref={pickerRef}
+              type="file"
+              accept={IMAGE_ACCEPT}
+              multiple
+              hidden
+              onChange={e => {
+                attach(imageFiles(e.target.files))
+                e.target.value = ""
+              }}
+            />
+          </>
+        )}
       </div>
+
+      {attachments.error && (
+        <div className="flex items-center gap-1.5 px-2 pb-1.5 text-[11px] text-destructive">
+          <span className="min-w-0 flex-1 break-words">{attachments.error}</span>
+        </div>
+      )}
+
+      {!isShell && attachments.images.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-2 pb-1.5">
+          {attachments.images.map(img => (
+            <span key={img.id} title={`${img.name} · ${formatBytes(base64Bytes(img.data))}`} className="relative">
+              {/* eslint-disable-next-line @next/next/no-img-element -- inline data: URL thumbnail */}
+              <img src={`data:${img.mimeType};base64,${img.data}`} alt={img.name} className="h-12 w-12 rounded border border-border object-cover" />
+              <button
+                type="button"
+                title={`Remove ${img.name}`}
+                className="absolute -right-1 -top-1 rounded-full border border-border bg-background text-muted-foreground hover:text-foreground"
+                onClick={() => attachments.remove(img.id)}
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
       {isShell && (
         <div className="flex items-center gap-1.5 px-2 pb-1.5 text-[11px] text-muted-foreground">
@@ -306,6 +431,7 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
             onSelect={trackCaret}
             onClick={trackCaret}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             onBlur={() => setDismissedAt(mention?.start ?? null)}
             onFocus={() => setDismissedAt(null)}
             rows={PROMPT_ROWS}
