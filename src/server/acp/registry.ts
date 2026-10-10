@@ -9,6 +9,7 @@ import { AgentProcess } from "./agent-process"
 import { findAgent, type AgentConfig } from "./config"
 import { AgentSession, DEFAULT_TITLE } from "./session"
 import { runShell, shellContext, stopShell } from "./shell"
+import { trustProject } from "./trust"
 
 const IDLE_MS = 30 * 60_000
 const REAP_INTERVAL_MS = 60_000
@@ -298,6 +299,23 @@ async function cancel(session: AgentSession) {
   await proc.connection.cancel({ sessionId: session.id })
 }
 
+// Writes the trust flag into the agent's own store, then stops the agent
+// process. It only reads the flag when it starts, so the client opens a new
+// session afterwards and the agents runs with the project trusted.
+async function trust(session: AgentSession) {
+  if (session.busy) throw new HttpError(409, "The agent is working; wait for it to finish")
+  const agent = await findAgent(session.agentId)
+  await trustProject(agent, session.repo)
+  const key = processKey(session.agentId, session.repo)
+  const proc = await registry.processes.get(key)?.catch(() => null)
+  if (!proc) return
+  registry.processes.delete(key)
+  proc.kill()
+  // Wait for the exit handler, so the client's next session really starts a
+  // fresh process that reads the new flag.
+  await proc.exited
+}
+
 export async function runAction(session: AgentSession, action: AcpAction): Promise<void> {
   switch (action.action) {
     case "prompt":
@@ -323,6 +341,8 @@ export async function runAction(session: AgentSession, action: AcpAction): Promi
       return runShell(session, String(action.command ?? ""), action.share === true)
     case "shellStop":
       return stopShell(session, action.shellId)
+    case "trust":
+      return trust(session)
     default:
       throw new HttpError(400, `Unknown action: ${(action as { action: string }).action}`)
   }

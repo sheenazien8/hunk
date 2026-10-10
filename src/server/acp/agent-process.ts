@@ -48,18 +48,22 @@ export function agentEnv(extra: Record<string, string> | undefined): NodeJS.Proc
 export class AgentProcess {
   capabilities: AgentCapabilities = {}
   lastActive = Date.now()
+  // Resolves once the child has exited (and its exit handler has run).
+  readonly exited: Promise<void>
   private stderr: string[] = []
-  private exited = false
+  private dead = false
 
   private constructor(
     readonly agent: AgentConfig,
     readonly repo: string,
     private child: ChildProcess,
     readonly connection: ClientSideConnection,
-  ) {}
+  ) {
+    this.exited = new Promise(resolve => child.once("exit", () => setImmediate(resolve)))
+  }
 
   get alive() {
-    return !this.exited
+    return !this.dead
   }
 
   static async start(agent: AgentConfig, repo: string, handlers: AgentHandlers, hunkEnv: Record<string, string> = {}): Promise<AgentProcess> {
@@ -94,7 +98,7 @@ export class AgentProcess {
     child.on("error", e => failStart(new Error(`Failed to start ${command}: ${e.message}`)))
     child.on("exit", (code, signal) => {
       children.delete(child)
-      proc.exited = true
+      proc.dead = true
       const reason = `Agent exited (${signal ?? code})${proc.stderr.length ? `: ${proc.stderr.slice(-3).join(" | ")}` : ""}`
       failStart(new Error(reason))
       handlers.exit(reason)
@@ -129,6 +133,6 @@ export class AgentProcess {
   }
 
   kill() {
-    if (!this.exited) this.child.kill("SIGTERM")
+    if (!this.dead) this.child.kill("SIGTERM")
   }
 }

@@ -110,5 +110,8 @@ export type AcpAction =
   // Runs `command` in the session's repo; share = !, private = !!
   | { action: "shell"; command: string; share?: boolean }
   | { action: "shellStop"; shellId: string }
+  // Marks the repo trusted in the agent's own store (its terminal trust
+  // prompt); takes effect the next time the agent process starts.
+  | { action: "trust" }
 
 export type AcpActionRequest = AcpAction & { sessionId: string }

@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef, useState } from "react"
-import { ArrowDown, Bot, Loader2, Plus, RefreshCw, Trash2, X, Zap } from "lucide-react"
+import { ArrowDown, Bot, Loader2, Plus, RefreshCw, ShieldCheck, Trash2, X, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog, useConfirm } from "@/components/ui/confirm-dialog"
+import { asksForTrust } from "@/lib/acp/trust"
 import { cn } from "@/lib/utils"
 import { ChatItemView } from "./chat-items"
 import { PromptBox } from "./prompt-box"
@@ -11,7 +12,24 @@ import type { Agent } from "./use-agent"
 const NEAR_BOTTOM_PX = 80
 const selectCls = "h-8 min-w-0 cursor-pointer rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
 
-function Messages({ agent, repo, onOpenFile }: { agent: Agent; repo: string; onOpenFile: (file: string) => void }) {
+function TrustCta({ agent, onTrust }: { agent: Agent; onTrust: () => void }) {
+  const { items } = agent.transcript
+  // Offered while the agent's latest message asking for trust is still the
+  // newest exchange (no user prompt since), and not after Hunk trusted it.
+  const i = items.findLastIndex(item => item.kind === "agent" && asksForTrust(item.text))
+  if (i < 0 || agent.trusted || items.slice(i + 1).some(item => item.kind === "user")) return null
+  return (
+    <div className="flex items-center justify-center gap-2 pt-1">
+      <Button size="sm" variant="outline" className="h-7 gap-1.5 px-2.5 text-xs" disabled={agent.pending === "trust"} onClick={onTrust}>
+        {agent.pending === "trust" ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+        Trust this project
+      </Button>
+      <span className="text-[10px] text-muted-foreground">restarts the agent</span>
+    </div>
+  )
+}
+
+function Messages({ agent, repo, onOpenFile, onTrust }: { agent: Agent; repo: string; onOpenFile: (file: string) => void; onTrust: () => void }) {
   const { items, state } = agent.transcript
   const scrollRef = useRef<HTMLDivElement>(null)
   const nearBottomRef = useRef(true)
@@ -48,6 +66,7 @@ function Messages({ agent, repo, onOpenFile }: { agent: Agent; repo: string; onO
         {items.map(item => (
           <ChatItemView key={item.id} item={item} repo={repo} onOpenFile={onOpenFile} onAnswer={agent.answer} onStopShell={agent.stopShell} />
         ))}
+        <TrustCta agent={agent} onTrust={onTrust} />
         {state.busy && !waiting && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite">
             <Loader2 size={14} className="animate-spin" /> Working…
@@ -102,6 +121,14 @@ export function AgentPanel({ agent, repo, files, changedFiles, activeFile, onOpe
       confirmLabel: "Close session",
       destructive: true,
     })) void agent.closeSession()
+  }
+
+  const trustRepo = async () => {
+    if (await confirm.ask({
+      title: `Trust this project for ${agent.agents.find(a => a.id === agent.agentId)?.name || "the agent"}?`,
+      description: "Writes the agent's own trust flag for this folder (like its terminal trust prompt), then restarts the agent so it loads the project's settings, skills and extensions.",
+      confirmLabel: "Trust project",
+    })) void agent.trustRepo()
   }
 
   return (
@@ -176,7 +203,7 @@ export function AgentPanel({ agent, repo, files, changedFiles, activeFile, onOpe
         </div>
       )}
 
-      <Messages agent={agent} repo={repo} onOpenFile={onOpenFile} />
+      <Messages agent={agent} repo={repo} onOpenFile={onOpenFile} onTrust={trustRepo} />
       <PromptBox agent={agent} files={files} changedFiles={changedFiles} activeFile={activeFile} />
       <ConfirmDialog open={confirm.open} request={confirm.request} onConfirm={confirm.confirm} onOpenChange={confirm.onOpenChange} />
     </div>

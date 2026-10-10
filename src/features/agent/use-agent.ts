@@ -48,10 +48,14 @@ export function useAgent(repo: string, enabled: boolean, onFilesChanged: () => v
   // still opens a fresh stream.
   const [connection, setConnection] = useState(0)
   const [stream, setStream] = useState<{ connection: number; status: StreamStatus } | null>(null)
-  const [pending, setPending] = useState<"open" | "send" | null>(null)
+  const [pending, setPending] = useState<"open" | "send" | "trust" | null>(null)
   // Id of the setting being changed (the control shows a spinner)
   const [configPending, setConfigPending] = useState<string | null>(null)
   const [error, setError] = useState("")
+  // "<agentId>\0<repo>" pairs Hunk trusted this page load (hides the Trust
+  // button; the replayed history still holds the agent's old request).
+  const [trustedKeys, setTrustedKeys] = useState<string[]>([])
+  const trustKey = `${agentId}\0${repo}`
 
   const onFilesChangedRef = useRef(onFilesChanged)
   useEffect(() => {
@@ -234,6 +238,20 @@ export function useAgent(repo: string, enabled: boolean, onFilesChanged: () => v
     if (await act({ action: "close" })) select(null)
   }, [act, select])
 
+  // Trusts the repo in the agent's own store and kills its process so the
+  // next session starts under the new flag, then resumes the same session.
+  const trustRepo = useCallback(async () => {
+    if (!sessionId) return false
+    setPending("trust")
+    setError("")
+    const ok = await act({ action: "trust" })
+    setPending(null)
+    if (!ok) return false
+    setTrustedKeys(keys => [...keys, trustKey])
+    await openSession(sessionId)
+    return true
+  }, [act, openSession, sessionId, trustKey])
+
   return {
     agents,
     agentId,
@@ -248,6 +266,8 @@ export function useAgent(repo: string, enabled: boolean, onFilesChanged: () => v
     startTask,
     resume,
     send,
+    trustRepo,
+    trusted: trustedKeys.includes(trustKey),
     cancel: () => act({ action: "cancel" }),
     runShell,
     stopShell: (shellId: string) => act({ action: "shellStop", shellId }),
