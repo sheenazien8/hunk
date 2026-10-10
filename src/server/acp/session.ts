@@ -33,6 +33,8 @@ export class AgentSession {
   busy = false
   autoApprove = false
   connected = true
+  // The agent takes image prompt blocks (set from its capabilities)
+  images = false
   updatedAt = new Date()
   config: SessionConfig = { configOptions: [], modes: null, usage: null }
   shell: RunningShell | null = null
@@ -47,7 +49,7 @@ export class AgentSession {
   constructor(readonly id: string, readonly agentId: string, readonly repo: string) {}
 
   get state(): SessionState {
-    return { title: this.title, busy: this.busy, autoApprove: this.autoApprove, connected: this.connected }
+    return { title: this.title, busy: this.busy, autoApprove: this.autoApprove, connected: this.connected, images: this.images }
   }
 
   get subscriberCount() {
