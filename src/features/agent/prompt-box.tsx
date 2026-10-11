@@ -285,10 +285,9 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
   }
 
   const onDrop = (e: React.DragEvent) => {
-    const files = imageFiles(e.dataTransfer.files)
-    if (files.length === 0 || !canAttach) return
+    if (!canAttach || !Array.from(e.dataTransfer.items).some(i => i.kind === "file")) return
     e.preventDefault()
-    attach(files)
+    attach(imageFiles(e.dataTransfer.files))
   }
 
   return (
