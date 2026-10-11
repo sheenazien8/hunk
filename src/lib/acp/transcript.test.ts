@@ -27,6 +27,33 @@ describe("applyEvents", () => {
     ])
   })
 
+  it("keeps images as images in every message kind, never \"[image]\"", () => {
+    const img = { data: "AAAA", mimeType: "image/png" }
+    const image = (kind: "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk"): AcpEvent =>
+      ({ type: "update", update: { sessionUpdate: kind, content: { type: "image", ...img } } })
+    for (const [update, kind] of [["agent_message_chunk", "agent"], ["agent_thought_chunk", "thought"], ["user_message_chunk", "user"]] as const) {
+      expect(run([image(update)])).toEqual([{ kind, id: "e1", text: "", images: [img] }])
+    }
+    expect(JSON.stringify(run([image("agent_message_chunk")]))).not.toContain("[image]")
+  })
+
+  it("doesn't merge text across an image", () => {
+    const img = { data: "AAAA", mimeType: "image/png" }
+    const items = run([
+      chunk("agent_message_chunk", "Here "),
+      chunk("agent_message_chunk", "it is:"),
+      { type: "update", update: { sessionUpdate: "agent_message_chunk", content: { type: "image", ...img } } },
+      { type: "update", update: { sessionUpdate: "agent_message_chunk", content: { type: "image", ...img } } },
+      chunk("agent_message_chunk", "Done"),
+    ])
+    expect(items.map(i => ("text" in i ? [i.text, i.images?.length ?? 0] : null))).toEqual([["Here it is:", 2], ["Done", 0]])
+  })
+
+  it("shows images sent with a prompt", () => {
+    const images = [{ data: "AAAA", mimeType: "image/jpeg" }]
+    expect(run([{ type: "user_prompt", text: "look", images }])[0]).toEqual({ kind: "user", id: "e1", text: "look", images })
+  })
+
   it("upserts tool calls and keeps their position", () => {
     const items = run([
       { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Read", kind: "read", status: "pending" } },
@@ -87,7 +114,7 @@ describe("applyEvents", () => {
   })
 
   it("stores the latest state", () => {
-    const state = { title: "T", busy: true, autoApprove: false, connected: true }
+    const state = { title: "T", busy: true, autoApprove: false, connected: true, images: false }
     expect(applyEvents(emptyTranscript(), seq([{ type: "state", state }])).state).toEqual(state)
   })
 })

@@ -4,7 +4,7 @@ import path from "path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type { AcpEvent } from "@/lib/acp/types"
 import { loadAgents } from "./config"
-import { getSession, listLiveSessions, listPastSessions, openSession, promptBlocks, runAction, stopAll } from "./registry"
+import { getSession, listLiveSessions, listPastSessions, openSession, promptBlocks, promptImages, runAction, stopAll } from "./registry"
 import type { AgentSession } from "./session"
 
 const fakeAgent = path.resolve(__dirname, "../../../test/fake-acp-agent.mjs")
@@ -49,6 +49,10 @@ function waitFor(session: AgentSession, match: (e: AcpEvent) => boolean, timeout
 
 const isTurnEnd = (e: AcpEvent) => e.type === "turn_end"
 
+// 1x1 PNG / the start of a JPEG
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1]).toString("base64")
+
 describe("config", () => {
   it("falls back to claude-agent-acp for a missing file", async () => {
     expect(await loadAgents(path.join(tmp, "nope.json"))).toEqual([{ id: "claude", name: "Claude", command: ["claude-agent-acp"] }])
@@ -72,6 +76,29 @@ describe("promptBlocks", () => {
 
   it("rejects paths outside the repo", () => {
     expect(() => promptBlocks("/r/repo", "x", ["../etc/passwd"])).toThrow(/Invalid file path/)
+  })
+
+  it("adds one image block per attached image, and no empty text", () => {
+    const image = { data: PNG, mimeType: "image/png" }
+    expect(promptBlocks("/r/repo", "look", [], [image])).toEqual([{ type: "text", text: "look" }, { type: "image", ...image }])
+    expect(promptBlocks("/r/repo", "  ", [], [image])).toEqual([{ type: "image", ...image }])
+  })
+})
+
+describe("promptImages", () => {
+  it("accepts allowlisted types whose bytes match", () => {
+    expect(promptImages(undefined)).toEqual([])
+    expect(promptImages([{ data: PNG, mimeType: "image/png" }, { data: JPEG, mimeType: "image/jpeg" }])).toHaveLength(2)
+  })
+
+  it("rejects anything else", () => {
+    expect(() => promptImages("x")).toThrow(/Invalid images/)
+    expect(() => promptImages([{ data: PNG }])).toThrow(/invalid/)
+    expect(() => promptImages([{ data: PNG, mimeType: "image/svg+xml" }])).toThrow(/isn't supported/)
+    expect(() => promptImages([{ data: PNG, mimeType: "image/jpeg" }])).toThrow(/isn't really image\/jpeg/)
+    expect(() => promptImages([{ data: "not base64!", mimeType: "image/png" }])).toThrow(/base64/)
+    expect(() => promptImages([{ data: "A".repeat(8 * 1024 * 1024), mimeType: "image/png" }])).toThrow(/max 5\.0 MB/)
+    expect(() => promptImages(Array(5).fill({ data: PNG, mimeType: "image/png" }))).toThrow(/At most 4/)
   })
 })
 
@@ -192,6 +219,35 @@ describe("registry with a fake agent", () => {
     await expect(runAction(session, { action: "setConfig", configId: "nope", value: "x" })).rejects.toThrow(/Unknown setting/)
     await expect(runAction(session, { action: "setConfig", configId: "fast", value: "yes" })).rejects.toThrow(/Wrong value type/)
     await expect(runAction(session, { action: "setMode", modeId: "nope" })).rejects.toThrow(/Unknown mode/)
+  })
+
+  it("sends attached images to the agent and logs them with the prompt", async () => {
+    const session = getSession(await openSession(repoDir("images"), "fake"))
+    expect(session.state.images).toBe(true)
+    const done = waitFor(session, isTurnEnd)
+    await runAction(session, { action: "prompt", text: "image", images: [{ data: PNG, mimeType: "image/png" }] })
+    const events = await done
+    expect(events[0]).toEqual({ type: "user_prompt", text: "image", images: [{ data: PNG, mimeType: "image/png" }] })
+    const contents = events.flatMap(e => (e.type === "update" && e.update.sessionUpdate === "agent_message_chunk" ? [e.update.content] : []))
+    expect(contents).toEqual([
+      { type: "text", text: `got image/png ${PNG.length}` },
+      { type: "image", mimeType: "image/png", data: expect.any(String) },
+    ])
+  })
+
+  it("replaces an oversized agent image with a placeholder", async () => {
+    const session = getSession(await openSession(repoDir("huge"), "fake"))
+    const done = waitFor(session, isTurnEnd)
+    await runAction(session, { action: "prompt", text: "huge" })
+    const chunk = (await done).find(e => e.type === "update" && e.update.sessionUpdate === "agent_message_chunk")
+    expect(chunk).toMatchObject({ update: { content: { type: "text", text: expect.stringMatching(/^\[image: image\/png, 6\.0 MB — too large to show\]$/) } } })
+  })
+
+  it("refuses images for an agent without image prompts", async () => {
+    const session = getSession(await openSession(repoDir("noimg"), "fake"))
+    expect(session.state.images).toBe(false)
+    await expect(runAction(session, { action: "prompt", text: "x", images: [{ data: PNG, mimeType: "image/png" }] })).rejects.toThrow(/Fake doesn't accept images/)
+    expect(session.busy).toBe(false)
   })
 
   it("close removes the session", async () => {

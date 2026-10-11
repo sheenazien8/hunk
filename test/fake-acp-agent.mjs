@@ -3,6 +3,9 @@
 //   "hello"  streams two chunks        "edit"  tool call + permission request
 //   "wait"   runs until cancelled      "crash" exits the process
 //   ...+"echo" (last text block) replies with the earlier text blocks
+//   "image"  replies with each image block it got, then a screenshot
+//   "huge"   replies with an image too large to keep
+// A repo dir named "noimg" (or FAKE_NO_IMAGES=1) gets an agent without image prompts.
 import { Readable, Writable } from "node:stream"
 import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk"
 
@@ -19,12 +22,14 @@ function configOptions(s) {
 }
 
 const MODES = [{ id: "ask", name: "Ask" }, { id: "code", name: "Code" }]
+// 1x1 PNG
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
 
 const agent = conn => ({
   async initialize() {
     return {
       protocolVersion: PROTOCOL_VERSION,
-      agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } },
+      agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} }, promptCapabilities: { image: !process.cwd().endsWith("/noimg") && !process.env.FAKE_NO_IMAGES } },
     }
   },
   async authenticate() {
@@ -68,6 +73,17 @@ const agent = conn => ({
     const texts = prompt.filter(b => b.type === "text").map(b => b.text)
     if (texts.at(-1) === "echo") {
       await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: texts.slice(0, -1).join("\n---\n") } })
+      return { stopReason: "end_turn" }
+    }
+    if (texts.at(-1) === "image") {
+      for (const b of prompt.filter(b => b.type === "image")) {
+        await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `got ${b.mimeType} ${b.data.length}` } })
+      }
+      await update({ sessionUpdate: "agent_message_chunk", content: { type: "image", mimeType: "image/png", data: PNG } })
+      return { stopReason: "end_turn" }
+    }
+    if (text === "huge") {
+      await update({ sessionUpdate: "agent_message_chunk", content: { type: "image", mimeType: "image/png", data: "A".repeat(8 * 1024 * 1024) } })
       return { stopReason: "end_turn" }
     }
     if (text === "wait") {

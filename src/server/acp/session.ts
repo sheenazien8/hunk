@@ -1,6 +1,7 @@
 import "server-only"
 import { randomUUID } from "crypto"
 import type { PermissionOption, RequestPermissionResponse, SessionConfigOption, SessionModeState, SessionUpdate, ToolCallUpdate } from "@agentclientprotocol/sdk"
+import { capEventImages, MAX_SESSION_IMAGE_BYTES } from "@/lib/acp/images"
 import { autoApproveOption } from "@/lib/acp/permissions"
 import type { AcpEvent, SeqEvent, SessionConfig, SessionState, ShellResult } from "@/lib/acp/types"
 
@@ -33,6 +34,8 @@ export class AgentSession {
   busy = false
   autoApprove = false
   connected = true
+  // The agent takes image prompt blocks (set from its capabilities)
+  images = false
   updatedAt = new Date()
   config: SessionConfig = { configOptions: [], modes: null, usage: null }
   shell: RunningShell | null = null
@@ -40,6 +43,7 @@ export class AgentSession {
   // prompt carries them.
   sharedShell: ShellResult[] = []
   private events: SeqEvent[] = []
+  private retainedImageBytes = 0
   private seq = 0
   private subscribers = new Set<Subscriber>()
   private pending = new Map<string, PendingPermission>()
@@ -47,7 +51,7 @@ export class AgentSession {
   constructor(readonly id: string, readonly agentId: string, readonly repo: string) {}
 
   get state(): SessionState {
-    return { title: this.title, busy: this.busy, autoApprove: this.autoApprove, connected: this.connected }
+    return { title: this.title, busy: this.busy, autoApprove: this.autoApprove, connected: this.connected, images: this.images }
   }
 
   get subscriberCount() {
@@ -59,7 +63,9 @@ export class AgentSession {
   }
 
   push(event: AcpEvent) {
-    const entry = { seq: ++this.seq, event }
+    const bounded = capEventImages(event, MAX_SESSION_IMAGE_BYTES - this.retainedImageBytes)
+    this.retainedImageBytes += bounded.retainedBytes
+    const entry = { seq: ++this.seq, event: bounded.event }
     this.events.push(entry)
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS)
     this.updatedAt = new Date()

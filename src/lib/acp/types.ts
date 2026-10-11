@@ -1,4 +1,5 @@
 import type { PermissionOption, SessionConfigOption, SessionModeState, SessionUpdate, StopReason, ToolCallUpdate } from "@agentclientprotocol/sdk"
+import type { ChatImage } from "./images"
 
 // API contract for /api/acp/* — shared by the routes and the client.
 
@@ -25,6 +26,8 @@ export interface SessionState {
   busy: boolean
   autoApprove: boolean
   connected: boolean
+  // The agent accepts image prompts (promptCapabilities.image)
+  images: boolean
 }
 
 // A `!` / `!!` command run from the prompt box: the real process output,
@@ -45,7 +48,7 @@ export interface ShellResult {
 // the replay that follows starts from the beginning of the buffer.
 export type AcpEvent =
   | { type: "update"; update: SessionUpdate }
-  | { type: "user_prompt"; text: string }
+  | { type: "user_prompt"; text: string; images?: ChatImage[] }
   | { type: "permission_request"; requestId: string; toolCall: ToolCallUpdate; options: PermissionOption[] }
   | { type: "permission_resolved"; requestId: string; optionId: string | null; auto: boolean }
   | { type: "turn_end"; stopReason: StopReason | "error" }
@@ -99,8 +102,9 @@ export interface OpenSessionResponse {
 }
 
 export type AcpAction =
-  // `files`: repo-relative paths mentioned with @, sent as resource links
-  | { action: "prompt"; text: string; files?: string[] }
+  // `files`: repo-relative paths mentioned with @, sent as resource links;
+  // `images`: attached images, sent as image blocks
+  | { action: "prompt"; text: string; files?: string[]; images?: ChatImage[] }
   | { action: "cancel" }
   | { action: "permission"; requestId: string; optionId: string | null }
   | { action: "autoApprove"; enabled: boolean }
