@@ -171,7 +171,7 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
   const { height, isResizing, startResize, reset, boxRef } = usePromptHeight()
   const attachments = useAttachments()
   const pickerRef = useRef<HTMLInputElement>(null)
-  const canAttach = !disabled && agent.transcript.state.images
+  const canAttach = !disabled && agent.transcript.state.images && !attachments.busy
 
   useEffect(() => {
     if (agent.sessionId) boxRef.current?.focus()
