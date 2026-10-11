@@ -7,11 +7,14 @@ import type { ContentBlock, SessionUpdate, ToolCallContent } from "@agentclientp
 export interface ChatImage {
   data: string
   mimeType: string
+  placeholder?: string
 }
 
 export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const
 // Per image, decoded. Images enter the event log, which the browser replays.
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+// Base64 is ASCII, so its character count is also its byte count in the event log.
+export const MAX_SESSION_IMAGE_BYTES = 16 * 1024 * 1024
 export const MAX_PROMPT_IMAGES = 4
 // All images of one prompt, base64. The proxy buffers request bodies only up
 // to 10 MB (and silently truncates past that), so stay well under it.
@@ -46,27 +49,84 @@ export function imagePlaceholder(mimeType: string, data: string, reason?: string
   return `[image: ${mimeType || "unknown type"}, ${formatBytes(base64Bytes(data))}${reason ? ` — ${reason}` : ""}]`
 }
 
-function capBlock(block: ContentBlock): ContentBlock {
-  if (block.type !== "image" || base64Bytes(block.data) <= MAX_IMAGE_BYTES) return block
-  return { type: "text", text: imagePlaceholder(block.mimeType, block.data, "too large to show") }
+function capBlock(block: ContentBlock, remainingBytes = Infinity): ContentBlock {
+  if (block.type !== "image") return block
+  if (base64Bytes(block.data) > MAX_IMAGE_BYTES) {
+    return { type: "text", text: imagePlaceholder(block.mimeType, block.data, "too large to show") }
+  }
+  if (block.data.length > remainingBytes) {
+    return { type: "text", text: imagePlaceholder(block.mimeType, block.data, "session image budget exceeded") }
+  }
+  return block
 }
 
-function capToolContent(content: ToolCallContent[] | null | undefined) {
-  return content?.map(c => (c.type === "content" ? { ...c, content: capBlock(c.content) } : c))
+function capToolContent(content: ToolCallContent[] | null | undefined, cap: (block: ContentBlock) => ContentBlock) {
+  return content?.map(c => (c.type === "content" ? { ...c, content: cap(c.content) } : c))
 }
 
-// An agent update with oversized images replaced by a placeholder, so one
-// huge screenshot (live or replayed by session/load) can't bloat the log.
-export function capUpdateImages(u: SessionUpdate): SessionUpdate {
+function capUpdateImagesWithBudget(u: SessionUpdate, availableBytes: number) {
+  let remainingBytes = availableBytes
+  const cap = (block: ContentBlock) => {
+    const bounded = capBlock(block, remainingBytes)
+    if (bounded.type === "image") remainingBytes -= bounded.data.length
+    return bounded
+  }
+  let update: SessionUpdate
   switch (u.sessionUpdate) {
     case "user_message_chunk":
     case "agent_message_chunk":
     case "agent_thought_chunk":
-      return u.content.type === "image" ? { ...u, content: capBlock(u.content) } : u
+      update = u.content.type === "image" ? { ...u, content: cap(u.content) } : u
+      break
     case "tool_call":
     case "tool_call_update":
-      return u.content ? { ...u, content: capToolContent(u.content) } : u
+      update = u.content ? { ...u, content: capToolContent(u.content, cap) } : u
+      break
     default:
-      return u
+      update = u
   }
+  return { update, retainedBytes: Number.isFinite(availableBytes) ? availableBytes - remainingBytes : 0 }
+}
+
+// An agent update with oversized or over-budget images replaced by placeholders
+// before it is logged or sent to connected clients.
+export function capUpdateImages(u: SessionUpdate): SessionUpdate {
+  return capUpdateImagesWithBudget(u, Infinity).update
+}
+
+// Enforces the per-session image payload budget across prompts and agent updates.
+export function capEventImages(event: import("./types").AcpEvent, availableBytes: number) {
+  if (event.type === "update") {
+    const bounded = capUpdateImagesWithBudget(event.update, availableBytes)
+    return { event: { ...event, update: bounded.update }, retainedBytes: bounded.retainedBytes }
+  }
+  if (event.type === "permission_request" && event.toolCall.content) {
+    let remainingBytes = availableBytes
+    const content = capToolContent(event.toolCall.content, block => {
+      const bounded = capBlock(block, remainingBytes)
+      if (bounded.type === "image") remainingBytes -= bounded.data.length
+      return bounded
+    })
+    return {
+      event: { ...event, toolCall: { ...event.toolCall, content } },
+      retainedBytes: availableBytes - remainingBytes,
+    }
+  }
+  if (event.type !== "user_prompt" || !event.images?.length) return { event, retainedBytes: 0 }
+
+  let remainingBytes = availableBytes
+  let retainedBytes = 0
+  const images = event.images.map(image => {
+    if (image.data.length > remainingBytes) {
+      return {
+        ...image,
+        data: "",
+        placeholder: imagePlaceholder(image.mimeType, image.data, "session image budget exceeded"),
+      }
+    }
+    remainingBytes -= image.data.length
+    retainedBytes += image.data.length
+    return image
+  })
+  return { event: { ...event, images }, retainedBytes }
 }

@@ -108,6 +108,9 @@ function DiffBlock({ content, repo, onOpenFile }: { content: Extract<ToolCallCon
 function ImageBlock({ image, alt }: { image: ChatImage; alt: string }) {
   const [open, setOpen] = useState(false)
   const [broken, setBroken] = useState(false)
+  if (image.placeholder) {
+    return <div className="font-mono text-xs text-muted-foreground">{image.placeholder}</div>
+  }
   if (broken || !isImageType(image.mimeType) || !image.data) {
     return <div className="font-mono text-xs text-muted-foreground">{imagePlaceholder(image.mimeType, image.data, broken ? "can't be shown" : undefined)}</div>
   }

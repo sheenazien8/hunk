@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { base64Bytes, capUpdateImages, imagePlaceholder, sniffImageType } from "./images"
+import { base64Bytes, capEventImages, capUpdateImages, imagePlaceholder, sniffImageType } from "./images"
 
 describe("images", () => {
   it("measures decoded base64", () => {
@@ -19,5 +19,26 @@ describe("images", () => {
     const small = { type: "image" as const, mimeType: "image/png", data: "AAAA" }
     const u = capUpdateImages({ sessionUpdate: "tool_call", toolCallId: "t", title: "Shot", content: [{ type: "content", content: big }, { type: "content", content: small }] })
     expect(u).toMatchObject({ content: [{ content: { type: "text", text: imagePlaceholder("image/png", big.data, "too large to show") } }, { content: small }] })
+  })
+
+  it("replaces over-budget prompt images with lightweight placeholders", () => {
+    const event = {
+      type: "user_prompt" as const,
+      text: "look",
+      images: [
+        { data: "AAAA", mimeType: "image/png" },
+        { data: "BBBB", mimeType: "image/jpeg" },
+      ],
+    }
+
+    const bounded = capEventImages(event, 4)
+
+    expect(bounded.retainedBytes).toBe(4)
+    expect(bounded.event).toMatchObject({
+      images: [
+        { data: "AAAA", mimeType: "image/png" },
+        { data: "", mimeType: "image/jpeg", placeholder: imagePlaceholder("image/jpeg", "BBBB", "session image budget exceeded") },
+      ],
+    })
   })
 })
