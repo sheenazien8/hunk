@@ -110,6 +110,42 @@ const agent = conn => ({
       await update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: ok ? "completed" : "failed" })
       return { stopReason: "end_turn" }
     }
+    if (text === "question") {
+      const toolCall = {
+        toolCallId: "q1",
+        title: "Ask a question",
+        kind: "other",
+        status: "pending",
+      }
+      await update({ sessionUpdate: "tool_call", ...toolCall })
+      const res = await conn.createElicitation({
+        mode: "form",
+        sessionId,
+        toolCallId: "q1",
+        message: "What is your favorite color?",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            question_0: {
+              type: "string",
+              title: "Color",
+              oneOf: [
+                { const: "Red", title: "Red" },
+                { const: "Blue", title: "Blue", description: "The sky" },
+              ],
+            },
+            question_0_custom: {
+              type: "string",
+              title: "Other",
+              description: "Or type your own",
+              _meta: { _askUserQuestionCustomAnswer: { questionId: "question_0", isCustomAnswer: true } },
+            },
+          },
+        },
+      })
+      await update({ sessionUpdate: "tool_call_update", toolCallId: "q1", status: res.action === "accept" ? "completed" : "failed" })
+      return { stopReason: "end_turn" }
+    }
     await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hel" } })
     await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "lo" } })
     return { stopReason: "end_turn" }

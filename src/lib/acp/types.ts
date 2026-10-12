@@ -1,6 +1,8 @@
 import type { PermissionOption, SessionConfigOption, SessionModeState, SessionUpdate, StopReason, ToolCallUpdate } from "@agentclientprotocol/sdk"
 import type { ChatImage } from "./images"
 
+export type ElicitationAnswer = string | string[] | number | boolean | null
+
 // API contract for /api/acp/* — shared by the routes and the client.
 
 export interface AgentInfo {
@@ -51,6 +53,20 @@ export type AcpEvent =
   | { type: "user_prompt"; text: string; images?: ChatImage[] }
   | { type: "permission_request"; requestId: string; toolCall: ToolCallUpdate; options: PermissionOption[] }
   | { type: "permission_resolved"; requestId: string; optionId: string | null; auto: boolean }
+  | {
+      type: "elicitation_request"
+      elicitId: string
+      sessionId: string
+      toolCallId: string | null
+      message: string
+      requestedSchema: ElicitationSchema
+    }
+  | {
+      type: "elicitation_resolved"
+      elicitId: string
+      action: "accept" | "decline" | "cancel"
+      content: Record<string, ElicitationContentValue> | undefined
+    }
   | { type: "turn_end"; stopReason: StopReason | "error" }
   | { type: "error"; message: string }
   | { type: "state"; state: SessionState }
@@ -107,6 +123,12 @@ export type AcpAction =
   | { action: "prompt"; text: string; files?: string[]; images?: ChatImage[] }
   | { action: "cancel" }
   | { action: "permission"; requestId: string; optionId: string | null }
+  | {
+      action: "elicitation"
+      elicitId: string
+      response: "accept" | "decline" | "cancel"
+      answers?: Record<string, ElicitationAnswer>
+    }
   | { action: "autoApprove"; enabled: boolean }
   | { action: "setConfig"; configId: string; value: string | boolean }
   | { action: "setMode"; modeId: string }

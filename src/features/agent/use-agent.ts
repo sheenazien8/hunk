@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import type { ElicitationContentValue } from "@agentclientprotocol/sdk"
 import type { ToolKind } from "@agentclientprotocol/sdk"
 import { api } from "@/lib/api-client"
 import type { ChatImage } from "@/lib/acp/images"
@@ -253,6 +254,8 @@ export function useAgent(repo: string, enabled: boolean, onFilesChanged: () => v
     runShell,
     stopShell: (shellId: string) => act({ action: "shellStop", shellId }),
     answer: (requestId: string, optionId: string | null) => act({ action: "permission", requestId, optionId }),
+    answerElicitation: (elicitId: string, response: "accept" | "decline" | "cancel", answers?: Record<string, ElicitationContentValue>) =>
+      act({ action: "elicitation", elicitId, response, answers }),
     setAutoApprove: (enabled: boolean) => act({ action: "autoApprove", enabled }),
     configPending,
     setConfig: (configId: string, value: string | boolean) => changeSetting(configId, { action: "setConfig", configId, value }),

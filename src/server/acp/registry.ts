@@ -77,6 +77,12 @@ async function getProcess(agent: AgentConfig, repo: string): Promise<AgentProces
       if (!session) return { outcome: { outcome: "cancelled" } }
       return session.requestPermission(params.toolCall, params.options)
     },
+    createElicitation: async params => {
+      if (params.mode !== "form" || "requestId" in params) return { action: "cancel", _meta: {} }
+      const session = registry.sessions.get(params.sessionId)
+      if (!session) return { action: "cancel", _meta: {} }
+      return session.createElicitation(params)
+    },
     exit: reason => {
       if (registry.processes.get(key) === starting) registry.processes.delete(key)
       for (const session of [...registry.sessions.values()]) {
@@ -340,6 +346,11 @@ export async function runAction(session: AgentSession, action: AcpAction): Promi
     case "permission":
       if (!session.answerPermission(action.requestId, action.optionId)) {
         throw new HttpError(409, "That permission request was already answered")
+      }
+      return
+    case "elicitation":
+      if (!session.answerElicitation(action.elicitId, action.response, action.answers)) {
+        throw new HttpError(409, "That elicitation was already answered")
       }
       return
     case "autoApprove":

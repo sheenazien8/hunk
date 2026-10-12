@@ -1,6 +1,9 @@
 import type { PermissionOption, PlanEntry, StopReason, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolKind } from "@agentclientprotocol/sdk"
 import type { ChatImage } from "./images"
 import type { AcpEvent, SeqEvent, SessionConfig, SessionState, ShellResult } from "./types"
+import { parseElicitationSchema, type QuestionItem } from "./elicitation"
+
+export * from "./elicitation"
 
 // Folds a session's event log into the chat items the panel renders.
 
@@ -29,6 +32,7 @@ export type ChatItem =
       status: "pending" | "answered" | "auto" | "cancelled"
       optionId: string | null
     }
+  | QuestionItem
   | { kind: "turn_end"; id: string; stopReason: StopReason | "error" }
   | { kind: "error"; id: string; message: string }
   | { kind: "notice"; id: string; severity: string; title: string; description?: string }
@@ -157,6 +161,29 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
             ...item,
             optionId: event.optionId,
             status: event.optionId === null ? "cancelled" : event.auto ? "auto" : "answered",
+          }
+        }
+        break
+      }
+      case "elicitation_request":
+        items.push({
+          kind: "question",
+          id,
+          elicitId: event.elicitId,
+          message: event.message,
+          fields: parseElicitationSchema(event.requestedSchema),
+          status: "pending",
+          content: null,
+        })
+        break
+      case "elicitation_resolved": {
+        const i = indexWhere(item => item.kind === "question" && item.elicitId === event.elicitId)
+        const item = items[i]
+        if (item?.kind === "question") {
+          items[i] = {
+            ...item,
+            status: event.action === "accept" ? "answered" : event.action === "decline" ? "skipped" : "cancelled",
+            content: event.action === "accept" ? (event.content ?? {}) : null,
           }
         }
         break

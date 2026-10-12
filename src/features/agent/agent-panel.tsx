@@ -35,7 +35,7 @@ function Messages({ agent, repo, onOpenFile }: { agent: Agent; repo: string; onO
     setShowJump(!near)
   }
 
-  const waiting = items.some(i => i.kind === "permission" && i.status === "pending")
+  const waiting = items.some(i => i.kind === "permission" && i.status === "pending") || items.some(i => i.kind === "question" && i.status === "pending")
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -46,7 +46,15 @@ function Messages({ agent, repo, onOpenFile }: { agent: Agent; repo: string; onO
           </div>
         )}
         {items.map(item => (
-          <ChatItemView key={item.id} item={item} repo={repo} onOpenFile={onOpenFile} onAnswer={agent.answer} onStopShell={agent.stopShell} />
+          <ChatItemView
+            key={item.id}
+            item={item}
+            repo={repo}
+            onOpenFile={onOpenFile}
+            onAnswer={agent.answer}
+            onAnswerElicitation={agent.answerElicitation}
+            onStopShell={agent.stopShell}
+          />
         ))}
         {state.busy && !waiting && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite">

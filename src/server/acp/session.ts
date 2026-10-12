@@ -1,9 +1,22 @@
 import "server-only"
 import { randomUUID } from "crypto"
-import type { PermissionOption, RequestPermissionResponse, SessionConfigOption, SessionModeState, SessionUpdate, ToolCallUpdate } from "@agentclientprotocol/sdk"
 import { capEventImages, MAX_SESSION_IMAGE_BYTES } from "@/lib/acp/images"
-import { autoApproveOption } from "@/lib/acp/permissions"
-import type { AcpEvent, SeqEvent, SessionConfig, SessionState, ShellResult } from "@/lib/acp/types"
+import {
+  CreateElicitationRequest,
+  CreateElicitationResponse,
+  ElicitationPropertySchema,
+  ElicitationSchema,
+  MultiSelectItems,
+  PermissionOption,
+  RequestPermissionResponse,
+  SessionConfigOption,
+  SessionModeState,
+  SessionUpdate,
+  ToolCallUpdate,
+  type ElicitationContentValue,
+  type EnumOption,
+} from "@agentclientprotocol/sdk"
+import type { AcpEvent, ElicitationAnswer, SeqEvent, SessionConfig, SessionState, ShellResult } from "@/lib/acp/types"
 
 // Older events are dropped past this; a client that reconnects from before
 // the oldest one gets a reset + full replay of what's left.
@@ -27,6 +40,11 @@ interface PendingPermission {
   resolve: (response: RequestPermissionResponse) => void
 }
 
+interface PendingElicitation {
+  requestedSchema: ElicitationSchema
+  resolve: (response: CreateElicitationResponse) => void
+}
+
 // One ACP session: its event log (what the browser replays and streams),
 // run state, and the permission requests waiting for an answer.
 export class AgentSession {
@@ -47,6 +65,7 @@ export class AgentSession {
   private seq = 0
   private subscribers = new Set<Subscriber>()
   private pending = new Map<string, PendingPermission>()
+  private pendingElicitations = new Map<string, PendingElicitation>()
 
   constructor(readonly id: string, readonly agentId: string, readonly repo: string) {}
 
@@ -59,7 +78,7 @@ export class AgentSession {
   }
 
   get pendingCount() {
-    return this.pending.size
+    return this.pending.size + this.pendingElicitations.size
   }
 
   push(event: AcpEvent) {
@@ -130,6 +149,35 @@ export class AgentSession {
     return new Promise(resolve => this.pending.set(requestId, { options, resolve }))
   }
 
+  createElicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse> {
+    if (params.mode !== "form" || "requestId" in params) {
+      return Promise.resolve({ action: "cancel", _meta: {} })
+    }
+    const elicitId = randomUUID()
+    const requestedSchema = params.requestedSchema ?? { type: "object", properties: {} }
+    this.push({
+      type: "elicitation_request",
+      elicitId,
+      sessionId: params.sessionId,
+      toolCallId: params.toolCallId ?? null,
+      message: params.message,
+      requestedSchema,
+    })
+    return new Promise(resolve => this.pendingElicitations.set(elicitId, { requestedSchema, resolve }))
+  }
+
+  answerElicitation(elicitId: string, action: "accept" | "decline" | "cancel", answers?: Record<string, ElicitationAnswer>): boolean {
+    const pending = this.pendingElicitations.get(elicitId)
+    if (!pending) return false
+    this.pendingElicitations.delete(elicitId)
+    const content: Record<string, ElicitationContentValue> | undefined = action === "accept" ? validateElicitationAnswers(pending.requestedSchema, answers) : undefined
+    this.push({ type: "elicitation_resolved", elicitId, action, content })
+    if (action === "accept") pending.resolve({ action: "accept", content })
+    else if (action === "decline") pending.resolve({ action: "decline", _meta: {} })
+    else pending.resolve({ action: "cancel", _meta: {} })
+    return true
+  }
+
   // optionId null = cancelled. Returns false for an unknown/answered request.
   answerPermission(requestId: string, optionId: string | null, auto = false): boolean {
     const pending = this.pending.get(requestId)
@@ -154,9 +202,10 @@ export class AgentSession {
   }
 
   // ACP: when the client cancels a turn it must answer every pending
-  // permission request with "cancelled".
+  // permission request with "cancelled" and every elicitation with "cancel".
   cancelPending() {
     for (const requestId of [...this.pending.keys()]) this.answerPermission(requestId, null)
+    for (const elicitId of [...this.pendingElicitations.keys()]) this.answerElicitation(elicitId, "cancel")
   }
 
   // The agent is gone (process exit or session closed): fail what's
@@ -173,3 +222,61 @@ export class AgentSession {
     this.subscribers.clear()
   }
 }
+
+function validateElicitationAnswers(
+  schema: ElicitationSchema,
+  answers: Record<string, ElicitationAnswer> | undefined,
+): Record<string, ElicitationContentValue> {
+  const out: Record<string, ElicitationContentValue> = {}
+  if (!answers || typeof answers !== "object") return out
+  const properties = schema.properties ?? {}
+  for (const [key, raw] of Object.entries(answers)) {
+    const prop = properties[key]
+    if (!prop || raw === undefined || raw === null) continue
+    if (ElicitationPropertySchema.isBoolean(prop) && typeof raw === "boolean") {
+      out[key] = raw
+      continue
+    }
+    if ((ElicitationPropertySchema.isNumber(prop) || ElicitationPropertySchema.isInteger(prop)) && typeof raw === "number") {
+      if (ElicitationPropertySchema.isInteger(prop) && !Number.isInteger(raw)) continue
+      if (prop.minimum != null && raw < prop.minimum) continue
+      if (prop.maximum != null && raw > prop.maximum) continue
+      out[key] = raw
+      continue
+    }
+    if (ElicitationPropertySchema.isString(prop) && typeof raw === "string") {
+      if (prop.minLength != null && raw.length < prop.minLength) continue
+      if (prop.maxLength != null && raw.length > prop.maxLength) continue
+      if (prop.enum && !prop.enum.includes(raw)) continue
+      if (prop.oneOf && !prop.oneOf.some(o => o.const === raw)) continue
+      out[key] = raw
+      continue
+    }
+    if (ElicitationPropertySchema.isArray(prop) && Array.isArray(raw)) {
+      const items = prop.items
+      if (!isStringEnumItems(items) && !isTitledItems(items)) continue
+      const allowed = isStringEnumItems(items)
+        ? new Set(items.enum)
+        : new Set((items as { anyOf: EnumOption[] }).anyOf.map(o => o.const))
+      const cleaned = raw.filter((v): v is string => typeof v === "string" && allowed.has(v))
+      if (isStringEnumItems(items) && cleaned.length === 0 && raw.length > 0) continue
+      if (prop.minItems != null && cleaned.length < prop.minItems) continue
+      if (prop.maxItems != null && cleaned.length > prop.maxItems) continue
+      out[key] = cleaned
+    }
+  }
+  return out
+}
+
+function isStringEnumItems(items: MultiSelectItems): items is { type: "string"; enum: string[] } {
+  return typeof items === "object" && (items as { type?: string }).type === "string" && Array.isArray((items as { enum?: unknown }).enum)
+}
+
+function isTitledItems(items: MultiSelectItems): items is { anyOf: EnumOption[] } {
+  return typeof items === "object" && Array.isArray((items as { anyOf?: unknown }).anyOf)
+}
+
+export const MAX_ELICITATION_FIELDS = 50
+export const MAX_ELICITATION_OPTIONS = 100
+export const MAX_ELICITATION_MESSAGE = 5000
+export const MAX_ELICITATION_LABEL = 2000

@@ -2,9 +2,9 @@ import { memo, useMemo, useState, type ReactNode } from "react"
 import Markdown from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
-import type { ToolCallContent, ToolKind } from "@agentclientprotocol/sdk"
+import type { ElicitationContentValue, ToolCallContent, ToolKind } from "@agentclientprotocol/sdk"
 import {
-  AlertTriangle, Brain, Check, ChevronRight, Circle, CircleDot, Copy, EyeOff, FileEdit, FileSearch, Globe, Info,
+  AlertTriangle, Brain, Check, ChevronRight, Circle, CircleDot, Copy, EyeOff, FileEdit, FileSearch, Globe, HelpCircle, Info,
   Loader2, ShieldQuestion, Square, SquareTerminal, Trash2, Wrench, X, Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { DiffView } from "@/features/viewer/diff-view"
 import { imagePlaceholder, isImageType, type ChatImage } from "@/lib/acp/images"
 import { unifiedDiff } from "@/lib/acp/line-diff"
-import { repoRelative, type ChatItem } from "@/lib/acp/transcript"
+import { repoRelative, summarizeAnswer, type ChatItem, type QuestionField, type QuestionItem } from "@/lib/acp/transcript"
 import type { ShellResult } from "@/lib/acp/types"
 import { cn } from "@/lib/utils"
 
@@ -323,11 +323,160 @@ function PermissionBlock({ item, onAnswer }: { item: Extract<ChatItem, { kind: "
   )
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, repo, onOpenFile, onAnswer, onStopShell }: {
+function QuestionBlock({ item, onAnswer }: { item: QuestionItem; onAnswer: (elicitId: string, response: "accept" | "decline" | "cancel", answers?: Record<string, ElicitationContentValue>) => void }) {
+  const [draft, setDraft] = useState<Record<string, ElicitationContentValue>>(item.content ?? {})
+  const isMulti = (type: QuestionField["type"]) => type === "multi"
+  const isSingle = (type: QuestionField["type"]) => type === "single"
+
+  const setField = (key: string | undefined, value: ElicitationContentValue) => {
+    if (!key) return
+    setDraft(prev => ({ ...prev, [key]: value }))
+  }
+
+  const toggleMulti = (key: string, value: string) => {
+    setDraft(prev => {
+      const current = Array.isArray(prev[key]) ? (prev[key] as string[]) : []
+      const next = current.includes(value) ? current.filter(v => v !== value) : [...current, value]
+      return { ...prev, [key]: next }
+    })
+  }
+
+  const summary = useMemo(() => {
+    if (item.status === "pending") return null
+    const parts = item.fields.map(f => {
+      const v = summarizeAnswer(f, draft)
+      return v ? `${f.title || f.key}: ${v}` : null
+    }).filter(Boolean)
+    return parts.join("; ") || (item.status === "skipped" ? "Skipped" : "Cancelled")
+  }, [item, draft])
+
+  return (
+    <div className={cn("rounded-md border p-2", item.status === "pending" ? "border-primary bg-primary/5" : "border-border bg-card")}>
+      <div className="flex items-start gap-2 text-xs">
+        <HelpCircle size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 break-words font-medium">{item.message}</span>
+        {item.status !== "pending" && (
+          <button type="button" onClick={() => onAnswer(item.elicitId, "cancel")} className="shrink-0 text-muted-foreground hover:text-foreground" title="Cancel">
+            <X size={14} />
+          </button>
+        )}
+      </div>
+      {item.status === "pending" ? (
+        <div className="mt-2 space-y-3">
+          {item.fields.map(field => (
+            <div key={field.key} className="space-y-1">
+              {field.title && <div className="text-xs font-medium">{field.title}</div>}
+              {field.description && <div className="text-[11px] text-muted-foreground">{field.description}</div>}
+              {isSingle(field.type) && (
+                <div className="space-y-1">
+                  {field.options.map(o => (
+                    <label key={o.value} className="flex items-start gap-2 rounded px-1.5 py-1 text-xs hover:bg-accent has-[:checked]:bg-accent">
+                      <input
+                        type="radio"
+                        name={field.key}
+                        value={o.value}
+                        checked={draft[field.key] === o.value}
+                        onChange={() => setField(field.key, o.value)}
+                        className="mt-0.5"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block">{o.title}</span>
+                        {o.description && <span className="block text-[10px] text-muted-foreground">{o.description}</span>}
+                      </span>
+                    </label>
+                  ))}
+                  {field.customKey && (
+                    <input
+                      type="text"
+                      placeholder="Other…"
+                      value={String(draft[field.customKey] ?? "")}
+                      onChange={e => field.customKey && setField(field.customKey, e.target.value)}
+                      className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                    />
+                  )}
+                </div>
+              )}
+              {isMulti(field.type) && (
+                <div className="space-y-1">
+                  {field.options.map(o => (
+                    <label key={o.value} className="flex items-start gap-2 rounded px-1.5 py-1 text-xs hover:bg-accent has-[:checked]:bg-accent">
+                      <input
+                        type="checkbox"
+                        value={o.value}
+                        checked={Array.isArray(draft[field.key]) && (draft[field.key] as string[]).includes(o.value)}
+                        onChange={() => toggleMulti(field.key, o.value)}
+                        className="mt-0.5"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block">{o.title}</span>
+                        {o.description && <span className="block text-[10px] text-muted-foreground">{o.description}</span>}
+                      </span>
+                    </label>
+                  ))}
+                  {field.customKey && (
+                    <input
+                      type="text"
+                      placeholder="Other…"
+                      value={String(draft[field.customKey] ?? "")}
+                      onChange={e => field.customKey && setField(field.customKey, e.target.value)}
+                      className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                    />
+                  )}
+                </div>
+              )}
+              {field.type === "boolean" && (
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={!!draft[field.key]}
+                    onChange={e => setField(field.key, e.target.checked)}
+                  />
+                  {field.title || field.key}
+                </label>
+              )}
+              {(field.type === "text") && (
+                <input
+                  type="text"
+                  value={String(draft[field.key] ?? "")}
+                  onChange={e => setField(field.key, e.target.value)}
+                  className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+              )}
+              {(field.type === "number" || field.type === "integer") && (
+                <input
+                  type="number"
+                  value={String(draft[field.key] ?? "")}
+                  min={field.min}
+                  max={field.max}
+                  step={field.type === "integer" ? 1 : undefined}
+                  onChange={e => {
+                    const v = e.target.value === "" ? "" : field.type === "integer" ? Number.parseInt(e.target.value, 10) : Number.parseFloat(e.target.value)
+                    setField(field.key, Number.isNaN(v) ? "" : v)
+                  }}
+                  className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+              )}
+            </div>
+          ))}
+          <div className="flex flex-wrap gap-1.5">
+            <Button size="sm" className="h-7 px-2 text-xs" onClick={() => onAnswer(item.elicitId, "accept", draft)}>Answer</Button>
+            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => onAnswer(item.elicitId, "decline")}>Skip</Button>
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => onAnswer(item.elicitId, "cancel")}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-1 text-xs text-muted-foreground">{summary}</div>
+      )}
+    </div>
+  )
+}
+
+export const ChatItemView = memo(function ChatItemView({ item, repo, onOpenFile, onAnswer, onAnswerElicitation, onStopShell }: {
   item: ChatItem
   repo: string
   onOpenFile: (file: string) => void
   onAnswer: (requestId: string, optionId: string | null) => void
+  onAnswerElicitation: (elicitId: string, response: "accept" | "decline" | "cancel", answers?: Record<string, ElicitationContentValue>) => void
   onStopShell: (shellId: string) => void
 }) {
   switch (item.kind) {
@@ -355,6 +504,8 @@ export const ChatItemView = memo(function ChatItemView({ item, repo, onOpenFile,
       return <ShellBlock item={item} onStop={onStopShell} />
     case "permission":
       return <PermissionBlock item={item} onAnswer={onAnswer} />
+    case "question":
+      return <QuestionBlock item={item} onAnswer={onAnswerElicitation} />
     case "turn_end":
       if (item.stopReason === "end_turn") return <div className="border-t border-dashed border-border" />
       return <div className="text-center text-xs text-muted-foreground">Stopped: {item.stopReason.replace(/_/g, " ")}</div>

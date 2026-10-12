@@ -255,6 +255,61 @@ describe("registry with a fake agent", () => {
     await runAction(session, { action: "close" })
     expect(() => getSession(session.id)).toThrow(/not found/)
   })
+
+  it("answers an elicitation", async () => {
+    const session = getSession(await openSession(repoDir("elicitation"), "fake"))
+    const asked = waitFor(session, e => e.type === "elicitation_request")
+    await runAction(session, { action: "prompt", text: "question" })
+    const request = (await asked).at(-1) as Extract<AcpEvent, { type: "elicitation_request" }>
+    expect(session.pendingCount).toBe(1)
+    const done = waitFor(session, isTurnEnd)
+    await runAction(session, { action: "elicitation", elicitId: request.elicitId, response: "accept", answers: { question_0: "Red" } })
+    const events = await done
+    expect(events).toContainEqual(expect.objectContaining({ type: "elicitation_resolved", elicitId: request.elicitId, action: "accept", content: { question_0: "Red" } }))
+    expect(events.some(e => e.type === "update" && e.update.sessionUpdate === "tool_call_update" && e.update.status === "completed")).toBe(true)
+  })
+
+  it("declines and cancels elicitations", async () => {
+    const session = getSession(await openSession(repoDir("elicitation-decline"), "fake"))
+    const asked = waitFor(session, e => e.type === "elicitation_request")
+    await runAction(session, { action: "prompt", text: "question" })
+    const request = (await asked).at(-1) as Extract<AcpEvent, { type: "elicitation_request" }>
+    const done = waitFor(session, e => e.type === "turn_end" || e.type === "elicitation_resolved")
+    await runAction(session, { action: "elicitation", elicitId: request.elicitId, response: "decline" })
+    expect((await done).some(e => e.type === "elicitation_resolved" && e.elicitId === request.elicitId && e.action === "decline")).toBe(true)
+  })
+
+  it("refuses to answer an unknown or already-answered elicitation", async () => {
+    await expect(runAction(getSession(await openSession(repoDir("elicitation-unknown"), "fake")), { action: "elicitation", elicitId: "nope", response: "accept" })).rejects.toThrow(/already answered/)
+    const session = getSession(await openSession(repoDir("elicitation-twice"), "fake"))
+    const asked = waitFor(session, e => e.type === "elicitation_request")
+    await runAction(session, { action: "prompt", text: "question" })
+    const request = (await asked).at(-1) as Extract<AcpEvent, { type: "elicitation_request" }>
+    await runAction(session, { action: "elicitation", elicitId: request.elicitId, response: "accept", answers: { question_0: "Blue" } })
+    await expect(runAction(session, { action: "elicitation", elicitId: request.elicitId, response: "accept" })).rejects.toThrow(/already answered/)
+  })
+
+  it("cancels pending elicitations when the turn is cancelled", async () => {
+    const session = getSession(await openSession(repoDir("elicitation-cancel"), "fake"))
+    const asked = waitFor(session, e => e.type === "elicitation_request")
+    await runAction(session, { action: "prompt", text: "question" })
+    const request = (await asked).at(-1) as Extract<AcpEvent, { type: "elicitation_request" }>
+    const done = waitFor(session, isTurnEnd)
+    await runAction(session, { action: "cancel" })
+    expect((await done).some(e => e.type === "elicitation_resolved" && e.elicitId === request.elicitId && e.action === "cancel")).toBe(true)
+  })
+
+  it("auto mode does not auto-answer questions", async () => {
+    const session = getSession(await openSession(repoDir("elicitation-auto"), "fake"))
+    await runAction(session, { action: "autoApprove", enabled: true })
+    const asked = waitFor(session, e => e.type === "elicitation_request")
+    await runAction(session, { action: "prompt", text: "question" })
+    const request = (await asked).at(-1) as Extract<AcpEvent, { type: "elicitation_request" }>
+    expect(session.pendingCount).toBe(1)
+    const done = waitFor(session, isTurnEnd)
+    await runAction(session, { action: "elicitation", elicitId: request.elicitId, response: "cancel" })
+    await done
+  })
 })
 
 describe("shell commands", () => {

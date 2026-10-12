@@ -6,6 +6,8 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
   type AgentCapabilities,
+  type CreateElicitationRequest,
+  type CreateElicitationResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
@@ -18,6 +20,7 @@ const STDERR_LINES = 20
 export interface AgentHandlers {
   sessionUpdate: (params: SessionNotification) => void
   requestPermission: (params: RequestPermissionRequest) => Promise<RequestPermissionResponse>
+  createElicitation: (params: CreateElicitationRequest) => Promise<CreateElicitationResponse>
   exit: (reason: string) => void
 }
 
@@ -75,6 +78,7 @@ export class AgentProcess {
     const connection = new ClientSideConnection(() => ({
       sessionUpdate: params => handlers.sessionUpdate(params),
       requestPermission: params => handlers.requestPermission(params),
+      createElicitation: params => handlers.createElicitation(params),
     }), stream)
     const proc = new AgentProcess(agent, repo, child, connection)
 
@@ -108,7 +112,7 @@ export class AgentProcess {
       const init = await Promise.race([
         connection.initialize({
           protocolVersion: PROTOCOL_VERSION,
-          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } },
           clientInfo: { name: "hunk", version: "0.1.0" },
         }),
         startFailed,

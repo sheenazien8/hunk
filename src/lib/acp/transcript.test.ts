@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { autoApproveOption } from "./permissions"
-import { applyEvents, emptyTranscript, repoRelative, type ChatItem } from "./transcript"
+import { applyEvents, emptyTranscript, repoRelative, summarizeAnswer, type ChatItem } from "./transcript"
 import type { AcpEvent, SeqEvent } from "./types"
 
 const seq = (events: AcpEvent[], from = 1): SeqEvent[] => events.map((event, i) => ({ seq: from + i, event }))
@@ -116,6 +116,48 @@ describe("applyEvents", () => {
   it("stores the latest state", () => {
     const state = { title: "T", busy: true, autoApprove: false, connected: true, images: false }
     expect(applyEvents(emptyTranscript(), seq([{ type: "state", state }])).state).toEqual(state)
+  })
+
+  it("tracks elicitation requests", () => {
+    const request: AcpEvent = {
+      type: "elicitation_request",
+      elicitId: "e1",
+      sessionId: "s1",
+      toolCallId: null,
+      message: "Pick one",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          question_0: {
+            type: "string",
+            oneOf: [{ const: "A", title: "A" }],
+          },
+          question_0_custom: {
+            type: "string",
+            _meta: { _askUserQuestionCustomAnswer: { questionId: "question_0", isCustomAnswer: true } },
+          },
+        },
+      },
+    }
+    const items = run([request])
+    const q = items[0]
+    expect(q).toMatchObject({ kind: "question", status: "pending", message: "Pick one" })
+    expect((q as { fields?: unknown }).fields).toEqual([
+      { key: "question_0", type: "single", title: undefined, description: undefined, options: [{ value: "A", title: "A" }], min: undefined, max: undefined, custom: false, customKey: "question_0_custom" },
+    ])
+    const answered = run([request, { type: "elicitation_resolved", elicitId: "e1", action: "accept", content: { question_0: "A" } }])
+    expect((answered[0] as { status: string }).status).toBe("answered")
+    expect((answered[0] as { content?: unknown }).content).toEqual({ question_0: "A" })
+    expect((run([request, { type: "elicitation_resolved", elicitId: "e1", action: "decline", content: undefined }])[0] as { status: string }).status).toBe("skipped")
+    expect((run([request, { type: "elicitation_resolved", elicitId: "e1", action: "cancel", content: undefined }])[0] as { status: string }).status).toBe("cancelled")
+  })
+
+  it("summarizes question answers", () => {
+    expect(summarizeAnswer({ key: "q", type: "single", options: [], customKey: "q_custom" }, { q: "A", q_custom: "note" })).toBe("note")
+    expect(summarizeAnswer({ key: "q", type: "multi", options: [] }, { q: ["A", "B"] })).toBe("A, B")
+    expect(summarizeAnswer({ key: "q", type: "boolean", options: [] }, { q: true })).toBe("Yes")
+    expect(summarizeAnswer({ key: "q", type: "text", options: [] }, { q: "hi" })).toBe("hi")
+    expect(summarizeAnswer({ key: "q", type: "number", options: [] }, { q: 42 })).toBe("42")
   })
 })
 
