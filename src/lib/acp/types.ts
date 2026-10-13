@@ -1,4 +1,13 @@
-import type { PermissionOption, SessionConfigOption, SessionModeState, SessionUpdate, StopReason, ToolCallUpdate } from "@agentclientprotocol/sdk"
+import type {
+  ElicitationContentValue,
+  ElicitationSchema,
+  PermissionOption,
+  SessionConfigOption,
+  SessionModeState,
+  SessionUpdate,
+  StopReason,
+  ToolCallUpdate,
+} from "@agentclientprotocol/sdk"
 import type { ChatImage } from "./images"
 
 export type ElicitationAnswer = string | string[] | number | boolean | null
@@ -30,6 +39,20 @@ export interface SessionState {
   connected: boolean
   // The agent accepts image prompts (promptCapabilities.image)
   images: boolean
+}
+
+// An agent-owned command output (the agent runs it, Hunk only displays it).
+// Identified by the terminalId of the tool call's `terminal` content; the
+// text is the last chunk of output (decoded, ANSI kept), cut to 64 KB.
+export interface TerminalSnapshot {
+  terminalId: string
+  // The command being run, when the agent reported one
+  command: string | null
+  // Working directory of the command, when reported (absolute)
+  cwd: string | null
+  text: string
+  // true = the command exited
+  exit: { exitCode: number | null; signal: string | null } | null
 }
 
 // A `!` / `!!` command run from the prompt box: the real process output,
@@ -82,6 +105,9 @@ export type AcpEvent =
   | { type: "shell_start"; shellId: string; command: string; share: boolean }
   | { type: "shell_output"; shellId: string; lines: string[]; dropped: number }
   | { type: "shell_end"; shellId: string; result: ShellResult }
+  // Latest known output of an agent terminal (one event per output update,
+  // replacing the previous snapshot for that terminalId in the transcript).
+  | { type: "terminal_snapshot"; terminal: TerminalSnapshot }
 
 export interface SeqEvent {
   seq: number

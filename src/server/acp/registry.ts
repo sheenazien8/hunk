@@ -1,6 +1,6 @@
 import "server-only"
 import { pathToFileURL } from "url"
-import type { ContentBlock, SessionInfo } from "@agentclientprotocol/sdk"
+import type { ContentBlock, SessionInfo, SessionUpdate } from "@agentclientprotocol/sdk"
 import { base64Bytes, capUpdateImages, formatBytes, isImageType, MAX_IMAGE_BYTES, MAX_PROMPT_IMAGE_CHARS, MAX_PROMPT_IMAGES, sniffImageType, type ChatImage } from "@/lib/acp/images"
 import type { AcpAction, AgentSessionSummary } from "@/lib/acp/types"
 import { HttpError } from "../http"
@@ -9,7 +9,27 @@ import { resolveInRepo } from "../repo"
 import { AgentProcess } from "./agent-process"
 import { findAgent, type AgentConfig } from "./config"
 import { AgentSession, DEFAULT_TITLE } from "./session"
+import { terminalPatches } from "./terminal-updates"
 import { runShell, shellContext, stopShell } from "./shell"
+
+// Bridges one agent session update into its session: known metadata is
+// tracked (title, config), terminal payloads fold into the per-terminal
+// buffers, and the raw update is logged for replay. The raw update always
+// goes through: the tool call must stay in the transcript for the terminal
+// to render into.
+export function handleSessionUpdate(session: AgentSession, u: SessionUpdate) {
+  if (u.sessionUpdate === "session_info_update" && u.title) session.setTitle(u.title)
+  session.trackConfig(u)
+  const patches = terminalPatches(u)
+  // pi's terminal metas carry no command; the tool call's title is the
+  // command line for bash-like tools, so take it from there.
+  const title = (u as { title?: string | null }).title
+  if (title && u.sessionUpdate.startsWith("tool_call")) {
+    for (const p of patches) if (p.command === undefined) p.command = title
+  }
+  for (const p of patches) session.trackTerminal(p)
+  session.push({ type: "update", update: u })
+}
 
 const IDLE_MS = 30 * 60_000
 const REAP_INTERVAL_MS = 60_000
@@ -67,10 +87,7 @@ async function getProcess(agent: AgentConfig, repo: string): Promise<AgentProces
     sessionUpdate: params => {
       const session = registry.sessions.get(params.sessionId)
       if (!session) return
-      const u = capUpdateImages(params.update)
-      if (u.sessionUpdate === "session_info_update" && u.title) session.setTitle(u.title)
-      session.trackConfig(u)
-      session.push({ type: "update", update: u })
+      handleSessionUpdate(session, capUpdateImages(params.update))
     },
     requestPermission: async params => {
       const session = registry.sessions.get(params.sessionId)

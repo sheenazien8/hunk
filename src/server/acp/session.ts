@@ -16,7 +16,9 @@ import {
   type ElicitationContentValue,
   type EnumOption,
 } from "@agentclientprotocol/sdk"
-import type { AcpEvent, ElicitationAnswer, SeqEvent, SessionConfig, SessionState, ShellResult } from "@/lib/acp/types"
+import { autoApproveOption } from "@/lib/acp/permissions"
+import { tailBytes, type TerminalBuffer, type TerminalPatch } from "@/lib/acp/terminal"
+import type { AcpEvent, ElicitationAnswer, SeqEvent, SessionConfig, SessionState, ShellResult, TerminalSnapshot } from "@/lib/acp/types"
 
 // Older events are dropped past this; a client that reconnects from before
 // the oldest one gets a reset + full replay of what's left.
@@ -46,7 +48,8 @@ interface PendingElicitation {
 }
 
 // One ACP session: its event log (what the browser replays and streams),
-// run state, and the permission requests waiting for an answer.
+// run state, the terminal buffers the agent reports, and the permission
+// requests waiting for an answer.
 export class AgentSession {
   title = DEFAULT_TITLE
   busy = false
@@ -60,6 +63,8 @@ export class AgentSession {
   // Shared (`!`) command results not yet sent to the agent; the next
   // prompt carries them.
   sharedShell: ShellResult[] = []
+  // Agent terminal output so far, by terminalId.
+  terminals = new Map<string, TerminalBuffer>()
   private events: SeqEvent[] = []
   private retainedImageBytes = 0
   private seq = 0
@@ -106,6 +111,29 @@ export class AgentSession {
   setConfig(configOptions: SessionConfigOption[] | null | undefined, modes: SessionModeState | null | undefined) {
     this.config = { ...this.config, configOptions: configOptions ?? this.config.configOptions, modes: modes ?? this.config.modes }
     this.push({ type: "config", config: this.config })
+  }
+
+  // Merges an agent terminal patch (info/output/exit) into the buffer for
+  // `patch.id` and logs the new snapshot. A `command` different from the
+  // previous one restarts the buffer (agents reuse ids for retries).
+  trackTerminal(patch: TerminalPatch) {
+    const id = patch.id
+    if (!id) return
+    const prev = this.terminals.get(id) ?? { command: null, cwd: null, text: "" }
+    const restart = patch.command !== undefined && patch.command !== null && patch.command !== prev.command
+    const text = restart
+      ? (patch.text ?? "")
+      : patch.replace
+        ? (patch.text ?? "")
+        : tailBytes(prev.text + (patch.text ?? ""))
+    const next: TerminalBuffer = {
+      command: patch.command !== undefined ? patch.command : prev.command,
+      cwd: patch.cwd !== undefined ? patch.cwd : prev.cwd,
+      text,
+    }
+    this.terminals.set(id, next)
+    const snapshot: TerminalSnapshot = { terminalId: id, command: next.command, cwd: next.cwd, text: next.text, exit: patch.exit ?? null }
+    this.push({ type: "terminal_snapshot", terminal: snapshot })
   }
 
   // Keeps the config snapshot in step with agent-side updates (the update

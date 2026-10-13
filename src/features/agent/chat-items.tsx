@@ -13,7 +13,7 @@ import { DiffView } from "@/features/viewer/diff-view"
 import { imagePlaceholder, isImageType, type ChatImage } from "@/lib/acp/images"
 import { unifiedDiff } from "@/lib/acp/line-diff"
 import { repoRelative, summarizeAnswer, type ChatItem, type QuestionField, type QuestionItem } from "@/lib/acp/transcript"
-import type { ShellResult } from "@/lib/acp/types"
+import type { TerminalSnapshot } from "@/lib/acp/types"
 import { cn } from "@/lib/utils"
 
 const MAX_RAW = 4000
@@ -141,9 +141,13 @@ function ImageList({ images, alt }: { images?: ChatImage[]; alt: string }) {
   )
 }
 
-function ToolContent({ content, repo, onOpenFile }: { content: ToolCallContent; repo: string; onOpenFile: (file: string) => void }) {
+function ToolContent({ content, terminal, repo, onOpenFile }: { content: ToolCallContent; terminal?: TerminalSnapshot; repo: string; onOpenFile: (file: string) => void }) {
   if (content.type === "diff") return <DiffBlock content={content} repo={repo} onOpenFile={onOpenFile} />
-  if (content.type === "terminal") return <div className="text-xs text-muted-foreground">Terminal {content.terminalId}</div>
+  if (content.type === "terminal") {
+    // The output lives in the snapshot attached to the tool item (keyed by
+    // terminalId); the ref alone has nothing to show.
+    return terminal ? <TerminalBlock terminal={terminal} /> : <div className="text-xs text-muted-foreground">Terminal {content.terminalId}</div>
+  }
   const block = content.content
   if (block.type === "image") return <ImageBlock image={block} alt="Tool output image" />
   const text = block.type === "text" ? block.text : block.type === "resource_link" ? block.uri : `[${block.type}]`
@@ -183,7 +187,9 @@ function ToolBlock({ item, repo, onOpenFile }: { item: Extract<ChatItem, { kind:
           ))}
         </div>
       )}
-      {item.content.map((c, i) => <ToolContent key={i} content={c} repo={repo} onOpenFile={onOpenFile} />)}
+      {item.content.map((c, i) => (
+        <ToolContent key={i} content={c} terminal={c.type === "terminal" ? item.terminals?.[c.terminalId] : undefined} repo={repo} onOpenFile={onOpenFile} />
+      ))}
       {item.content.length === 0 && item.rawInput !== undefined && (
         <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 font-mono text-xs">{rawText(item.rawInput)}</pre>
       )}
@@ -191,9 +197,47 @@ function ToolBlock({ item, repo, onOpenFile }: { item: Extract<ChatItem, { kind:
   )
 }
 
-function shellStatus(result: ShellResult): { label: string; ok: boolean } {
+// The agent's own command output arrives as terminal snapshots attached to
+// the tool call at fold time; the terminal content ref only anchors it.
+function TerminalBlock({ terminal }: { terminal: TerminalSnapshot }) {
+  const [copied, setCopied] = useState(false)
+  const status = terminal.exit && shellStatus({ exitCode: terminal.exit.exitCode, signal: terminal.exit.signal, timedOut: false })
+  const copy = () => {
+    void navigator.clipboard?.writeText(terminal.text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }, () => {})
+  }
+  return (
+    <div className="rounded-md border border-border bg-card">
+      <div className="flex min-w-0 items-center gap-2 px-2 py-1.5 text-xs">
+        <SquareTerminal size={14} className="shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate font-mono" title={terminal.command ?? terminal.terminalId}>
+          $ {terminal.command ?? terminal.terminalId}
+        </span>
+        {terminal.cwd && <span className="hidden shrink-0 truncate font-mono text-[10px] text-muted-foreground" title={terminal.cwd}>{terminal.cwd}</span>}
+        {status && <span className={cn("shrink-0 font-mono text-[10px]", status.ok ? "text-green-600 dark:text-green-400" : "text-destructive")}>{status.label}</span>}
+        {!terminal.exit && <Loader2 size={14} className="shrink-0 animate-spin text-muted-foreground" aria-label="running" />}
+        {terminal.text && (
+          <button type="button" title="Copy output" className="shrink-0 text-muted-foreground hover:text-foreground" onClick={copy}>
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+          </button>
+        )}
+      </div>
+      {terminal.text && (
+        <div className="border-t border-border">
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-xs">{terminal.text}</pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
+type ShellStatus = { exitCode: number | null; signal: string | null; timedOut?: boolean }
+
+function shellStatus(result: ShellStatus): { label: string; ok: boolean } {
   if (result.timedOut) return { label: "timed out", ok: false }
-  if (result.signal) return { label: "stopped", ok: false }
+  if (result.signal) return { label: `stopped (${result.signal})`, ok: false }
   if (result.exitCode === null) return { label: "failed", ok: false }
   return { label: `exit ${result.exitCode}`, ok: result.exitCode === 0 }
 }

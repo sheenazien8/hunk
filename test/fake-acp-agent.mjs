@@ -2,6 +2,7 @@
 // Minimal ACP agent over stdio for tests. Behaviour depends on the prompt:
 //   "hello"  streams two chunks        "edit"  tool call + permission request
 //   "wait"   runs until cancelled      "crash" exits the process
+//   "bash"   tool call with pi-style terminal metas + streamed output
 //   ...+"echo" (last text block) replies with the earlier text blocks
 //   "image"  replies with each image block it got, then a screenshot
 //   "huge"   replies with an image too large to keep
@@ -88,6 +89,52 @@ const agent = conn => ({
     }
     if (text === "wait") {
       return new Promise(resolve => running.set(sessionId, () => resolve({ stopReason: "cancelled" })))
+    }
+    if (text === "bash") {
+      // pi-style bash: terminal content + metas on the tool call, output
+      // deltas on updates, exit on the last one.
+      const t = "bash-1"
+      await update({
+        sessionUpdate: "tool_call",
+        toolCallId: t,
+        title: "echo hello",
+        kind: "execute",
+        status: "in_progress",
+        content: [{ type: "terminal", terminalId: t }],
+        _meta: { terminal_info: { terminal_id: t, cwd: process.cwd() } },
+      })
+      await update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: t,
+        status: "in_progress",
+        _meta: { terminal_output: { terminal_id: t, data: "hello\n" } },
+      })
+      await update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: t,
+        status: "completed",
+        _meta: {
+          terminal_output: { terminal_id: t, data: "world\n" },
+          terminal_exit: { terminal_id: t, exit_code: 0, signal: null },
+        },
+      })
+      return { stopReason: "end_turn" }
+    }
+    if (text === "v2terminal") {
+      // v2 RFD shapes, which the SDK schema does not know yet: sent as raw
+      // JSON-RPC notifications so newer agents are covered too.
+      const notify = (p) => {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: p } }) + "\n")
+      }
+      notify({ sessionUpdate: "terminal_update", terminalId: "v2-1", command: "cargo test", cwd: process.cwd() })
+      notify({ sessionUpdate: "terminal_output_chunk", terminalId: "v2-1", data: Buffer.from("passed\n").toString("base64") })
+      notify({
+        sessionUpdate: "terminal_update",
+        terminalId: "v2-1",
+        exitStatus: { exitCode: 0, signal: null },
+      })
+      await update({ sessionUpdate: "tool_call", toolCallId: "v2-call", title: "cargo test", kind: "execute", status: "completed", content: [{ type: "terminal", terminalId: "v2-1" }] })
+      return { stopReason: "end_turn" }
     }
     if (text === "edit") {
       const toolCall = {

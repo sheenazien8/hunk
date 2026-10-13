@@ -1,6 +1,6 @@
 import type { PermissionOption, PlanEntry, StopReason, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolKind } from "@agentclientprotocol/sdk"
 import type { ChatImage } from "./images"
-import type { AcpEvent, SeqEvent, SessionConfig, SessionState, ShellResult } from "./types"
+import type { AcpEvent, SeqEvent, SessionConfig, SessionState, ShellResult, TerminalSnapshot } from "./types"
 import { parseElicitationSchema, type QuestionItem } from "./elicitation"
 
 export * from "./elicitation"
@@ -21,6 +21,10 @@ export type ChatItem =
       content: ToolCallContent[]
       locations: ToolCallLocation[]
       rawInput?: unknown
+      // Latest output of the terminal(s) this tool call references, keyed by
+      // the terminalId of its `terminal` content; only set when the agent
+      // reported output for them.
+      terminals?: Record<string, TerminalSnapshot>
     }
   | { kind: "plan"; id: string; entries: PlanEntry[]; markdown?: string }
   | {
@@ -55,6 +59,12 @@ export interface Transcript {
   // Latest agent settings (model, thinking, mode…) and context usage
   config: SessionConfig
   lastSeq: number
+  // Latest known agent terminal output, by terminalId. Snapshots land here
+  // even before their tool call does; tool items carry the current copy.
+  terminals: Map<string, TerminalSnapshot>
+  // terminalId → the tool call whose `terminal` content references it, so
+  // snapshots know which item to attach to.
+  terminalTools: Map<string, string>
 }
 
 export function emptyTranscript(): Transcript {
@@ -63,6 +73,8 @@ export function emptyTranscript(): Transcript {
     state: { title: "", busy: false, autoApprove: false, connected: true, images: false },
     config: { configOptions: [], modes: null, usage: null },
     lastSeq: 0,
+    terminals: new Map(),
+    terminalTools: new Map(),
   }
 }
 
@@ -74,6 +86,8 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
   let state = t.state
   let config = t.config
   let lastSeq = t.lastSeq
+  const terminalTools = new Map(t.terminalTools)
+  const terminals = new Map(t.terminals)
 
   const last = () => items[items.length - 1]
   const replaceLast = (item: ChatItem) => {
@@ -113,6 +127,8 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
         state = emptyTranscript().state
         config = emptyTranscript().config
         lastSeq = 0
+        terminals.clear()
+        terminalTools.clear()
         break
       case "state":
         state = event.state
@@ -123,6 +139,16 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
       case "user_prompt":
         items.push(event.images?.length ? { kind: "user", id, text: event.text, images: event.images } : { kind: "user", id, text: event.text })
         break
+      case "terminal_snapshot": {
+        const { terminalId } = event.terminal
+        terminals.set(terminalId, event.terminal)
+        const toolCallId = terminalTools.get(terminalId)
+        const i = toolCallId === undefined ? -1 : indexWhere(item => item.kind === "tool" && item.toolCallId === toolCallId)
+        const item = items[i]
+        if (item?.kind !== "tool") break
+        items[i] = { ...item, terminals: { ...(item.terminals ?? {}), [terminalId]: event.terminal } }
+        break
+      }
       case "turn_end":
         items.push({ kind: "turn_end", id, stopReason: event.stopReason })
         break
@@ -203,7 +229,23 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
             break
           }
           case "tool_call": {
+            const terminalIds = terminalRefs(u.content)
+            // Refs and output arrive in either order (ACP v2 terminals RFD);
+            // neither side clears the other here. A genuinely new command
+            // restarts the buffer server-side, which pushes a fresh snapshot.
+            for (const t of terminalIds) terminalTools.set(t, u.toolCallId)
             const i = indexWhere(item => item.kind === "tool" && item.toolCallId === u.toolCallId)
+            const prev = i >= 0 ? items[i] : undefined
+            const prevTerminals = prev?.kind === "tool" ? prev.terminals : undefined
+            // A repeat tool_call without terminal content (a retry on the
+            // same id) keeps the previous output; one with refs re-attaches
+            // whatever the folded buffer already has for them.
+            let itemTerminals: Record<string, TerminalSnapshot> | undefined
+            if (terminalIds.length === 0) itemTerminals = prevTerminals
+            else {
+              const attached = terminalIds.filter(tid => terminals.has(tid))
+              if (attached.length > 0 || prevTerminals) itemTerminals = { ...prevTerminals, ...Object.fromEntries(attached.map(tid => [tid, terminals.get(tid)!])) }
+            }
             const item: ChatItem = {
               kind: "tool",
               id: i >= 0 ? items[i].id : id,
@@ -214,12 +256,15 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
               content: u.content ?? [],
               locations: u.locations ?? [],
               rawInput: u.rawInput,
+              ...(itemTerminals && { terminals: itemTerminals }),
             }
             if (i >= 0) items[i] = item
             else items.push(item)
             break
           }
           case "tool_call_update": {
+            const terminalIds = terminalRefs(u.content)
+            for (const t of terminalIds) terminalTools.set(t, u.toolCallId)
             const i = indexWhere(item => item.kind === "tool" && item.toolCallId === u.toolCallId)
             const prev = items[i]
             if (prev?.kind !== "tool") {
@@ -276,11 +321,19 @@ export function applyEvents(t: Transcript, events: SeqEvent[]): Transcript {
       }
     }
   }
-  return { items, state, config, lastSeq }
+  return { items, state, config, lastSeq, terminals, terminalTools }
 }
 
 export function applyEvent(t: Transcript, event: AcpEvent, seq: number): Transcript {
   return applyEvents(t, [{ seq, event }])
+}
+
+// The terminalIds a tool call's content references (its `terminal` items).
+// These are display anchors: output arrives separately and is attached to
+// the tool call keyed by them.
+function terminalRefs(content: ToolCallContent[] | null | undefined): string[] {
+  if (!content) return []
+  return content.filter(c => c.type === "terminal").map(c => c.terminalId)
 }
 
 // Tool kinds that change files in the working tree.

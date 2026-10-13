@@ -29,6 +29,11 @@ export interface AgentHandlers {
 // and NODE_OPTIONS from `next dev` isn't meant for the child.
 const STRIPPED_ENV = ["CLAUDECODE", "NODE_OPTIONS", "CLAUDE_CODE_ENTRYPOINT"]
 
+// Some agents (claude-agent-acp) gate their terminal output patches on these
+// init metas; ACP itself has no capability for display-only terminal output,
+// so there is nothing to advertise beyond the v1 `terminal: true`.
+export const CLIENT_TERMINAL_META = { "terminal-auth": true, terminal_output: true, terminal_output_delta: true }
+
 // Every running agent child, kept on globalThis (dev HMR) so one exit hook
 // can kill them all. It must be synchronous: nothing async runs during exit.
 const g = globalThis as typeof globalThis & { __hunkAcpChildren?: Set<ChildProcess> }
@@ -112,7 +117,10 @@ export class AgentProcess {
       const init = await Promise.race([
         connection.initialize({
           protocolVersion: PROTOCOL_VERSION,
-          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } },
+          // terminal: the agent may embed terminal refs and send terminal
+          // output patches; Hunk only displays them (no terminal/\* client
+          // methods are implemented — the agent owns its processes).
+          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: true, elicitation: { form: {} }, _meta: { terminal: CLIENT_TERMINAL_META } },
           clientInfo: { name: "hunk", version: "0.1.0" },
         }),
         startFailed,

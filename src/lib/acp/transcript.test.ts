@@ -213,3 +213,34 @@ describe("shell items", () => {
     expect(items[0]).toMatchObject({ lines: ["a", "b"] })
   })
 })
+
+describe("terminal snapshots", () => {
+  const toolCall = { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Run ls", kind: "execute", status: "in_progress", content: [{ type: "terminal", terminalId: "term-1" }] } } as AcpEvent
+  const snapshot = (text: string, exit = null) => ({ type: "terminal_snapshot", terminal: { terminalId: "term-1", command: "ls", cwd: "/r", text, exit } }) as AcpEvent
+
+  it("attaches snapshots to the tool call that references the terminal", () => {
+    const items = run([toolCall, snapshot("aaa\n"), snapshot("bbb\n")])
+    expect(items[0]).toMatchObject({ kind: "tool", terminals: { "term-1": { text: "bbb\n", command: "ls" } } })
+  })
+
+  it("attaches a snapshot that arrives before its tool call, keeps unknown ones out", () => {
+    const items = run([snapshot("early\n"), toolCall])
+    expect(items.length).toBe(1)
+    expect(items[0]).toMatchObject({ terminals: { "term-1": { text: "early\n" } } })
+    expect(run([snapshot("lonely\n")]).length).toBe(0)
+  })
+
+  it("drops output when a new command replaces the tool call", () => {
+    const update = (toolCall as Extract<AcpEvent, { type: "update" }>).update
+    const second = { type: "update", update: { ...update, title: "rm -rf", content: [{ type: "terminal", terminalId: "term-1" }] } } as AcpEvent
+    const third = { type: "terminal_snapshot", terminal: { terminalId: "term-1", command: "rm -rf", cwd: "/r", text: "new out\n", exit: null } } as AcpEvent
+    const items = run([toolCall, snapshot("old out\n"), second, third])
+    expect(items[0]).toMatchObject({ terminals: { "term-1": { text: "new out\n", command: "rm -rf" } } })
+  })
+
+  it("keeps a tool without terminal content unchanged", () => {
+    const plain = { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t2", title: "Read", kind: "read", status: "completed" } } as AcpEvent
+    const items = run([plain])
+    expect(items[0].kind === "tool" && items[0].terminals).toBeUndefined()
+  })
+})

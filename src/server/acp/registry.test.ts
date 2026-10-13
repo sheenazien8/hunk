@@ -310,6 +310,38 @@ describe("registry with a fake agent", () => {
     await runAction(session, { action: "elicitation", elicitId: request.elicitId, response: "cancel" })
     await done
   })
+
+  it("shows a bash tool call's terminal output as snapshots (pi-style metas)", async () => {
+    const session = getSession(await openSession(repoDir("terminal"), "fake"))
+    const done = waitFor(session, isTurnEnd)
+    await runAction(session, { action: "prompt", text: "bash" })
+    const events = await done
+    const snapshots = events.filter((e): e is Extract<AcpEvent, { type: "terminal_snapshot" }> => e.type === "terminal_snapshot")
+    // tool_call meta, output delta, then output + exit in the completion
+    expect(snapshots.map(s => [s.terminal.command, s.terminal.text])).toEqual([
+      ["echo hello", ""],
+      ["echo hello", "hello\n"],
+      ["echo hello", "hello\nworld\n"],
+    ])
+    expect(snapshots.at(-1)?.terminal.exit).toEqual({ exitCode: 0, signal: null })
+    expect(snapshots[0].terminal.cwd).toBe(session.repo)
+    // The tool call still streams so the UI has something to attach to
+    expect(events.some(e => e.type === "update" && e.update.sessionUpdate === "tool_call" && e.update.content?.some(c => c.type === "terminal"))).toBe(true)
+    // The buffer survives for later subscribers (resumed clients)
+    expect(session.terminals.get("bash-1")).toMatchObject({ text: "hello\nworld\n", command: "echo hello" })
+  })
+
+  it("parses v2 terminal_update/terminal_output_chunk notifications", async () => {
+    // SDK 1.5's zod validation drops unknown update kinds in transport, so
+    // end-to-end v2 arrivals cannot happen with this SDK; the parsing is
+    // exercised in terminal-updates.test.ts instead. Here only the fake
+    // agent's typed tool call goes through, proving the ref path.
+    const session = getSession(await openSession(repoDir("v2terminal"), "fake"))
+    const done = waitFor(session, isTurnEnd)
+    await runAction(session, { action: "prompt", text: "v2terminal" })
+    const events = await done
+    expect(events.some(e => e.type === "update" && e.update.sessionUpdate === "tool_call" && e.update.content?.some(c => c.type === "terminal" && c.terminalId === "v2-1"))).toBe(true)
+  })
 })
 
 describe("shell commands", () => {
