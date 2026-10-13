@@ -39,14 +39,38 @@ export function decodeTerminalBase64(data: string): string {
 }
 
 // Tail of a text buffer bounded by bytes, so one huge command cannot bloat
-// the session. Cuts at a UTF-16 boundary: only whole code units are kept.
+// the session. Byte-exact cut on a whole code unit; prefers a line start so
+// rendered rows stay whole. One forward scan, O(n) even for huge appends.
 export function tailBytes(text: string, max = TERMINAL_MAX_BYTES): string {
-  let from = 0
-  while (TextEncoderByteLength(text.slice(from)) > max) from++
-  return text.slice(from)
+  const total = TextEncoderByteLength(text)
+  if (total <= max) return text
+  const skip = total - max
+  let prefix = 0
+  let i = 0
+  // Latest line end whose byte count is still in the skippable range.
+  let lastNewline = -1
+  let bytesToNewline = 0
+  while (prefix < skip && i < text.length) {
+    const code = text.charCodeAt(i)
+    let size: number
+    if (code < 0x80) size = 1
+    else if (code < 0x800) size = 2
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      size = 4
+      i++ // the low surrogate rides along: pairs are never split
+    } else size = 3
+    prefix += size
+    if (code === 0x0a) {
+      lastNewline = i
+      bytesToNewline = prefix
+    }
+    i++
+  }
+  if (lastNewline >= 0 && total - bytesToNewline <= max) return text.slice(lastNewline + 1)
+  return text.slice(i)
 }
 
-// Byte length of a text buffer without copying (chunked into encodeInto).
+// Byte length of a text buffer without keeping the array (chunked encodeInto).
 function TextEncoderByteLength(text: string): number {
   let bytes = 0
   for (let i = 0; i < text.length; i += 0x8000) bytes += new TextEncoder().encodeInto(text.slice(i, i + 0x8000), new Uint8Array(4 * 0x8000)).written

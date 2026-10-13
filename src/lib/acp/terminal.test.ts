@@ -85,3 +85,30 @@ describe("terminal buffer merge", () => {
     expect(t.text).toBe("new")
   })
 })
+describe("tailBytes large appends", () => {
+  it("bounds a 200KB append quickly, whole lines only", () => {
+    const text = "y\n".repeat(100000)
+    const start = performance.now()
+    const out = tailBytes(text)
+    const ms = performance.now() - start
+    expect(ms).toBeLessThan(200)
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(TERMINAL_MAX_BYTES)
+    expect(out.startsWith("y\n")).toBe(true)
+    for (const line of out.split("\n")) expect(line === "" || line === "y").toBe(true)
+  })
+
+  it("never splits an astral character at the cut", () => {
+    const out = tailBytes("👋".repeat(20000))
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(TERMINAL_MAX_BYTES)
+    // 20000 emoji = 40000 code units = 80000 bytes; cut keeps whole pairs
+    expect(out.length % 2).toBe(0)
+    expect(out.charAt(0)).not.toBe("\uFFFD")
+  })
+
+  it("drops whole lines when a newline boundary is affordable", () => {
+    // 10 bytes over; the last affordable newline keeps whole rows
+    const out = tailBytes("abc\ndef\n" + "x".repeat(65540))
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(TERMINAL_MAX_BYTES)
+    expect(out.startsWith("x")).toBe(true)
+  })
+})
