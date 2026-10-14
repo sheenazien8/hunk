@@ -16,7 +16,10 @@ cp -r .next/static "$standalone/.next/"
 
 # server.js chdirs into .next/standalone and reads these at runtime; point them
 # at the repo copies so edits apply without a rebuild.
-for f in acp.config.json ignore.config.json plugins.json; do
+# settings.json is written from the UI: create it here so writes land in the
+# repo copy (they follow the link) instead of a file the next build wipes.
+[ -e settings.json ] || echo '{}' > settings.json
+for f in acp.config.json ignore.config.json plugins.json settings.json; do
   [ -e "$f" ] && ln -sfn "$root/$f" "$standalone/$f"
 done
 

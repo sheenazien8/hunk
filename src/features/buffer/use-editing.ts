@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react"
-import { isBinaryFile } from "@/features/files/file-types"
+import { isBinaryFile, isImageFile } from "@/features/files/file-types"
 import type { ActionResult } from "@/features/changes/use-git-actions"
 import { api } from "@/lib/api-client"
 import type { GitFile } from "@/lib/git/types"
@@ -16,9 +16,9 @@ export function useEditing({ repoPath, buffer, files, loadStatus, setActionResul
   const { active, update, fetchRaw, fetchEntry } = buffer
   const [isSaving, setIsSaving] = useState(false)
 
-  // Text files that still exist can be edited.
+  // svg counts as an image here, so it never opens as text.
   const canEdit = useCallback((file: string | null) => {
-    if (!file || isBinaryFile(file)) return false
+    if (!file || isBinaryFile(file) || isImageFile(file)) return false
     return files.find(f => f.path === file)?.status !== "deleted"
   }, [files])
 

@@ -12,6 +12,17 @@ export function isBinaryFile(file: string) {
   return BINARY_EXTS.has(file.slice(extIndex).toLowerCase())
 }
 
+// Formats the browser renders with <img>, svg included.
+const IMAGE_EXTS = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".svg",
+])
+
+export function isImageFile(file: string) {
+  const extIndex = file.lastIndexOf(".")
+  if (extIndex === -1) return false
+  return IMAGE_EXTS.has(file.slice(extIndex).toLowerCase())
+}
+
 export function isMarkdownFile(file: string) {
   return /\.(md|markdown|mdx)$/i.test(file)
 }

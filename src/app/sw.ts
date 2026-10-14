@@ -23,6 +23,10 @@ const serwist = new Serwist({
       handler: new NetworkOnly(),
     },
     {
+      matcher: ({ sameOrigin, url: { pathname } }) => sameOrigin && pathname.startsWith("/api/git/raw"),
+      handler: new NetworkOnly(),
+    },
+    {
       matcher: ({ sameOrigin, url: { pathname } }) => sameOrigin && (pathname.startsWith("/plugins/") || pathname === "/api/plugins"),
       handler: new NetworkOnly(),
     },

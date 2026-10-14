@@ -35,7 +35,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { BufferEntry, ViewMode } from "@/features/buffer/buffer"
-import { basename, isMarkdownFile } from "@/features/files/file-types"
+import { basename, isImageFile, isMarkdownFile } from "@/features/files/file-types"
 import { FindBar } from "@/features/find/find-bar"
 import type { Find } from "@/features/find/use-find"
 import { type CommitActions, commitActionsFor } from "@/features/history/commit-menu"
@@ -136,6 +136,7 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
   const title = commit ? `Commit ${commit.slice(0, 7)}` : active ? basename(active.file) : "Select a file"
   const subtitle = commit ? active?.commitData?.commit.subject ?? "" : ""
   const isBlame = active?.viewMode === "blame"
+  const isImageView = fileTools && isImageFile(active.file)
 
   return (
     <Card ref={cardRef} className="diff-card flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -218,7 +219,7 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
                   </Button>
                 </IconTip>
               )}
-              {fileTools && !active.fromAll && !editing && !resolving && (
+              {fileTools && !editing && !resolving && (!active.fromAll || isImageView) && (
                 <>
                   <IconTip tip={active.staged ? "Discard staged changes" : "Discard changes"}>
                     <Button
@@ -247,17 +248,19 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
                       <span className="hidden sm:inline">{active.staged ? "Unstage" : "Stage"}</span>
                     </Button>
                   </IconTip>
-                  <div role="group" aria-label="Diff view" className="flex items-center rounded-md border border-border p-0.5">
-                    <ViewToggle label="Split" active={active.viewMode === "split"} onClick={() => on.setViewMode(active, "split")}>
-                      <Split size={13} />
-                    </ViewToggle>
-                    <ViewToggle label="Unified" active={active.viewMode === "unified"} onClick={() => on.setViewMode(active, "unified")}>
-                      <AlignJustify size={13} />
-                    </ViewToggle>
-                    <ViewToggle label="Raw file" active={active.viewMode === "raw"} onClick={() => on.setViewMode(active, "raw")}>
-                      <FileCode size={13} />
-                    </ViewToggle>
-                  </div>
+                  {!isImageView && (
+                    <div role="group" aria-label="Diff view" className="flex items-center rounded-md border border-border p-0.5">
+                      <ViewToggle label="Split" active={active.viewMode === "split"} onClick={() => on.setViewMode(active, "split")}>
+                        <Split size={13} />
+                      </ViewToggle>
+                      <ViewToggle label="Unified" active={active.viewMode === "unified"} onClick={() => on.setViewMode(active, "unified")}>
+                        <AlignJustify size={13} />
+                      </ViewToggle>
+                      <ViewToggle label="Raw file" active={active.viewMode === "raw"} onClick={() => on.setViewMode(active, "raw")}>
+                        <FileCode size={13} />
+                      </ViewToggle>
+                    </div>
+                  )}
                 </>
               )}
               {editing && (
@@ -267,7 +270,7 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
                   </Button>
                 </IconTip>
               )}
-              {fileTools && !editing && !resolving && (
+              {fileTools && !editing && !resolving && !isImageView && (
                 <IconTip tip="Search in file (Ctrl/Cmd+F)">
                   <Button
                     variant={active.findOpen ? "default" : "ghost"}
@@ -293,12 +296,12 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
                       <FilePen /> Edit file
                     </DropdownMenuItem>
                   )}
-                  {fileTools && isMarkdownFile(active.file) && !editing && !resolving && !isBlame && (
+                  {fileTools && isMarkdownFile(active.file) && !isImageView && !editing && !resolving && !isBlame && (
                     <MenuToggle on={!!active.mdRender} onSelect={() => on.toggleMarkdown(active)}>
                       <Eye /> Render Markdown
                     </MenuToggle>
                   )}
-                  {fileTools && !editing && !resolving && (
+                  {fileTools && !isImageView && !editing && !resolving && (
                     <MenuToggle on={isBlame} onSelect={() => on.toggleBlame(active)}>
                       <ScanText /> Blame
                     </MenuToggle>
@@ -324,7 +327,7 @@ export function ViewerPanel({ active, repoPath, fullPath, conflicted, busyAction
             </div>
           )}
         </div>
-        {active?.findOpen && fileTools && !editing && !resolving && (
+        {active?.findOpen && fileTools && !isImageView && !editing && !resolving && (
           <div className="mt-2">
             <FindBar
               query={active.findQuery}

@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react"
 import { ArrowDown, Bot, Loader2, Plus, RefreshCw, Trash2, X, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog, useConfirm } from "@/components/ui/confirm-dialog"
+import { AUTO_MODE_WARNING } from "@/features/settings/settings-dialog"
 import { cn } from "@/lib/utils"
 import { ChatItemView } from "./chat-items"
 import { PromptBox } from "./prompt-box"
@@ -96,7 +97,7 @@ export function AgentPanel({ agent, repo, files, changedFiles, activeFile, onOpe
   const toggleAuto = async () => {
     if (!state.autoApprove && !(await confirm.ask({
       title: "Turn on auto mode?",
-      description: "The agent will run commands and edit files without asking.",
+      description: AUTO_MODE_WARNING,
       confirmLabel: "Turn on",
       destructive: true,
     }))) return

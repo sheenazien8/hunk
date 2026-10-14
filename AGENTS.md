@@ -32,7 +32,8 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   │   ├── git/{status,diff,content,all-files,action,worktrees}/route.ts
 │   │   ├── git/{blame,log,commit,branches,stash}/route.ts   (diff also takes ?commit=<sha>)
 │   │   ├── acp/{agents,sessions,action}/route.ts, acp/events/route.ts (SSE stream)
-│   │   └── plugins/route.ts    # GET plugin list (id + name) for the header menu
+│   │   ├── plugins/route.ts    # GET plugin list (id + name) for the header menu
+│   │   └── settings/route.ts   # GET / PATCH (deep merge) global settings
 │   │                           # Each: parse params → resolveRepo() → one server/ call → JSON.
 │   │                           #   Wrapped in withErrors() (HttpError → status, else 500 + git stderr).
 │   └── plugins/[id]/[[...path]]/route.ts   # forwards every method to the plugin (session-checked)
@@ -40,6 +41,7 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 ├── src/server/                 # `import "server-only"` in every module
 │   ├── config.ts               # projects.json (build-time import), defaultRepo(), findProject(),
 │   │                           #   HUNK_ALLOW_ANY_REPO, loadIgnorePatterns()
+│   ├── settings.ts             # settings.json store: loadSettings() per call, updateSettings() (atomic, queued)
 │   ├── repo.ts                 # resolveRepo() allowlist (403) + resolveInRepo() path-escape guard (400)
 │   ├── http.ts                 # HttpError, withErrors(), readJson(), requireParam(), errorMessage()
 │   ├── git/exec.ts             # git(repo, args, {okExitCodes}) via execFile; isUnbornHead, EMPTY_TREE
@@ -75,6 +77,7 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │                               #   agent-config.ts (settings → toolbar controls, context usage), shell-prefix.ts (!/!! parsing),
 │                               #   tail-lines.ts (last-150-lines output buffer)
 │   ├── plugins/types.ts        # plugin list + postMessage bridge contract (parsePluginMessage)
+│   ├── settings/types.ts       # Settings schema, DEFAULT_SETTINGS, parseSettings (validate/clamp), mergeSettings
 │   ├── repo-paths.ts           # topLevelPaths() — shared by server/fs and the sidebar
 │   ├── time-ago.ts             # compact relative times ("5m", "2d")
 │   ├── api-client.ts           # `api.*` typed fetchers — the ONLY place that calls /api/git/*, /api/acp/* and /api/plugins
@@ -111,8 +114,9 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   │                           #   useAgentPanel, drag width), agent-panel.tsx, prompt-box.tsx
 │   │                           #   (@-mentions, action buttons, resizable), config-bar.tsx (model/thinking/mode…),
 │   │                           #   session-picker.tsx + use-session-list.ts (paged popover), chat-items.tsx
-│   └── plugins/                # use-plugins.ts, plugin-menu.tsx (header Puzzle menu),
-│                               #   plugin-frames.tsx (iframes kept mounted + bridge listener)
+│   ├── plugins/                # use-plugins.ts, plugin-menu.tsx (header Puzzle menu),
+│   │                           #   plugin-frames.tsx (iframes kept mounted + bridge listener)
+│   └── settings/               # use-settings.ts (fetch once, optimistic PATCH), settings-dialog.tsx
 ├── src/hooks/use-popover.ts     # open state + outside-click/Escape for hand-rolled popovers
 ├── src/components/ui/          # shadcn/ui (badge, button, card, context-menu, dialog, input, scroll-area,
 │                               #   separator, sheet, skeleton, tabs, tooltip)
@@ -121,6 +125,7 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 ├── ignore.config.json          # Global ignore patterns for all-files browser (read at runtime)
 ├── acp.config.json             # Agent list for the chat (gitignored + dockerignored; see acp.config.example.json)
 ├── plugins.json                # Plugin list (gitignored + dockerignored; see plugins.example.json)
+├── settings.json               # Global settings written by the UI (gitignored + dockerignored; see settings.example.json)
 ├── public/hunk-plugin-sdk.js   # SDK served by Hunk to plugin pages (window.hunk)
 ├── Dockerfile / docker-compose.yml
 └── public/                     # PWA icons (192/512/maskable/apple), generated sw.js, fonts/
@@ -192,7 +197,12 @@ Vitest (`vitest.config.mts`, node env). Unit tests sit next to the code (`*.test
     *   Bulk Stage/Discard expand selected folders to the changed files under them.
     *   **Server**: action `move` (`files` + `to` folder) skips items already there and validates everything before moving anything. The client mirrors it with `validateMoveTarget` / `moveTargets`, and the latter drives the tab remap. Drag-and-drop always uses `move`; F2 rename uses `rename`.
 *   **Quick Open** (`features/quick-open/`, plan `docs/plan/25-quick-open-file-picker.md`): Ctrl/Cmd+P (also the header search button) fuzzy-finds over `repoFiles` (All Files minus git-ignored) ∪ changed files; empty query = open tabs then changed files. It's separate from the sidebar search input, which stays a tree/History filter. While it's open the global shortcut handler ignores keys. `path:42` opens the file raw (All Files tab) with `BufferEntry.gotoLine`, which `NumberedCode` scrolls to/highlights (CodeView only).
-*   **Dark mode**: persisted in `localStorage` under key `hunk-dark`. The `.dark` class is applied **pre-hydration** by an inline script in `layout.tsx` (localStorage → falls back to `prefers-color-scheme`), so there is no theme flash. `useTheme()` (`features/theme/theme.ts`) reads it via `useSyncExternalStore` and writes `localStorage` + toggles the class. Keep the key in sync with `layout.tsx`.
+*   **Global settings** (kanban CARD-40): `settings.json` (`HUNK_SETTINGS_PATH` overrides; gitignored/dockerignored, `settings.example.json`) is read on every call like `acp.config.json`, so changes apply at once. Writes go to a tmp file + rename, queued so concurrent PATCHes don't lose each other, and through a symlink (`deploy-host.sh` creates `settings.json` and links it into `.next/standalone`). `GET`/`PATCH /api/settings` return `{ settings, env, ignoreDefaults }`. The schema lives in `lib/settings/types.ts`: invalid values fall back per value and unknown keys are dropped. Leave room for per-project overrides later (`projects.<dir>`). The UI opens from the account menu ("Settings…") or `Ctrl/Cmd+,`.
+    *   **Where each setting applies**: `agent.autoApproveDefault` is set in `registry.openSession` before the first `pushState()` (new + loaded/resumed; a live session keeps its own state; elicitations are never auto-answered). `agent.defaultAgent` sorts first in `GET /api/acp/agents`, and the client takes `list[0]` when localStorage has no `hunk-agent`. Shell limits are env > settings > default, read per run. `viewer.*` feeds `newEntry()` through `useBuffer`'s `defaults`; tabs restored before the settings arrive start split. `git.confirmPush` asks in `push()` in `hunk-app.tsx`. `files.ignore` (null/empty = `ignore.config.json`, else built-in) is used by `loadIgnorePatterns`; the walker has no cache, and a save reloads status/All Files.
+    *   **Theme**: the server value is mirrored into `localStorage` `hunk-dark` (`applyTheme`; `system` removes the key), so the pre-hydration script still works. The account-menu toggle PATCHes the theme.
+    *   **No `git.pullStrategy`**: the sync menu shows both pulls side by side, so it has no default to set.
+    *   **Never** put anything in settings that changes what runs on the host or which repos are reachable: commands, `HUNK_ALLOW_ANY_REPO`, `HUNK_SHELL_DISABLED`, projects.
+*   **Dark mode**: persisted in `localStorage` under key `hunk-dark`. The `.dark` class is applied **pre-hydration** by an inline script in `layout.tsx` (localStorage → falls back to `prefers-color-scheme`), so there is no theme flash. `useTheme()` (`features/theme/theme.ts`) reads it via `useSyncExternalStore` (and follows the OS in `system` mode); `applyTheme()` writes `localStorage` + toggles the class from the server setting. Keep the key in sync with `layout.tsx`.
 *   **Viewer toolbar** (plan 34): visible = Discard · Stage · Split/Unified/Raw · Find · ⋯; everything else (Edit, Markdown, Blame, File history, Fullscreen, Delete) lives in the ⋯ `DropdownMenu` (`components/ui/dropdown-menu.tsx`, hand-written shadcn wrapper over `radix-ui`). On phones the CommitBar is a floating Commit pill + bottom `Sheet`, and the ActionToast sits under the header.
 *   **React compiler lint** (`react-hooks/refs`): don't return a ref inside an object you then read during render — destructure it (see `useFullscreen` in `viewer-panel.tsx`).
 *   **PWA**: Serwist wraps `next.config.ts` (`withSerwist` from `@serwist/turbopack`); worker source is `src/app/sw.ts` (precache + `defaultCache` runtime caching, `skipWaiting`/`clientsClaim`); compiled to `public/sw.js`. `manifest.webmanifest` is served via `src/app/manifest.ts`. `output: "standalone"` is required for the slim Docker image.

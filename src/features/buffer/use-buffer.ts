@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react"
 import { api } from "@/lib/api-client"
+import { isBinaryFile, isImageFile, isMarkdownFile } from "@/features/files/file-types"
 import {
   type BufferEntry,
+  type EntryDefaults,
   type TabKey,
   bufferReducer,
   emptyBuffer,
@@ -13,9 +15,13 @@ import {
 
 // Open-tabs state for one repo: the entries, the active tab, content loading
 // and per-repo persistence to localStorage.
-export function useBuffer(repoPath: string, statusLoading: boolean) {
+export function useBuffer(repoPath: string, statusLoading: boolean, defaults: EntryDefaults) {
   const [state, dispatch] = useReducer(bufferReducer, emptyBuffer)
   const { entries, activeId } = state
+  const defaultsRef = useRef(defaults)
+  useEffect(() => {
+    defaultsRef.current = defaults
+  })
 
   // The repo whose localStorage slot the buffer is persisted to. Persistence
   // only starts after the first restore() so the empty seed state never
@@ -54,7 +60,7 @@ export function useBuffer(repoPath: string, statusLoading: boolean) {
   // there from now on.
   const restore = useCallback((repo: string) => {
     persistedRepoRef.current = repo
-    dispatch({ type: "reset", state: readPersistedBuffer(repo) })
+    dispatch({ type: "reset", state: readPersistedBuffer(repo, defaultsRef.current) })
   }, [])
 
   // Reads the file's raw content into the entry and returns it.
@@ -90,6 +96,7 @@ export function useBuffer(repoPath: string, statusLoading: boolean) {
   // pull raw when the user has switched to raw view mode, or when the file is
   // unmerged (a combined diff) — the conflict view works on the file itself.
   // Commit tabs load the commit instead.
+  // Image tabs load their bytes by URL, and a diff of a binary file is noise.
   const fetchEntry = useCallback(async (entry: BufferEntry) => {
     if (entry.plugin) return
     inFlightRef.current.add(entry.id)
@@ -99,12 +106,16 @@ export function useBuffer(repoPath: string, statusLoading: boolean) {
         await fetchCommit(entry, entry.commit)
         return
       }
+      if (isImageFile(entry.file) || (isBinaryFile(entry.file) && entry.fromAll)) {
+        return
+      }
       const diff = entry.fromAll ? "" : await api.diff(repoPath, entry.file, entry.staged, entry.oldPath)
       update(entry.id, { diff })
       if (entry.fromAll || entry.viewMode === "raw" || isUnmergedDiff(diff)) {
         await fetchRaw(entry)
       }
       if (entry.viewMode === "blame") await fetchBlame(entry)
+      if (entry.mdRender && isMarkdownFile(entry.file)) update(entry.id, { md: await api.content(repoPath, entry.file) ?? "" })
     } catch {
       update(entry.id, { diff: "" })
     } finally {
@@ -132,7 +143,7 @@ export function useBuffer(repoPath: string, statusLoading: boolean) {
       activate(id)
       return
     }
-    const target = existing ?? newEntry(repoPath, key)
+    const target = existing ?? newEntry(repoPath, key, defaultsRef.current)
     dispatch({ type: "open", entry: target })
     // Re-opening a commit from another file's history focuses that file.
     if (existing && key.commitFile && existing.commitFile !== key.commitFile) update(id, { commitFile: key.commitFile })

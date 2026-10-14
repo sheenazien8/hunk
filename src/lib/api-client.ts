@@ -20,8 +20,9 @@ import type {
   WorktreesResponse,
 } from "@/lib/git/types"
 import type { PluginsResponse } from "@/lib/plugins/types"
+import type { SettingsPatch, SettingsResponse } from "@/lib/settings/types"
 
-// Typed wrappers around /api/git/* and /api/acp/*. Every call resolves with the success
+// Typed wrappers around /api/git/*, /api/acp/* and /api/settings. Every call resolves with the success
 // payload or throws an Error carrying the server's `error` message.
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -95,6 +96,10 @@ export const api = {
     return (await request<ContentResponse>(`/api/git/content?${query({ repo, file })}`)).content
   },
 
+  rawUrl(repo: string, file: string) {
+    return `/api/git/raw?${query({ repo, file })}`
+  },
+
   async saveContent(repo: string, file: string, content: string) {
     await request(`/api/git/content?${query({ repo, file })}`, json("PUT", { content }))
   },
@@ -126,6 +131,16 @@ export const api = {
 
     eventsUrl(sessionId: string) {
       return `/api/acp/events?${query({ sessionId })}`
+    },
+  },
+
+  settings: {
+    get() {
+      return request<SettingsResponse>("/api/settings")
+    },
+
+    update(patch: SettingsPatch) {
+      return request<SettingsResponse>("/api/settings", json("PATCH", patch))
     },
   },
 }

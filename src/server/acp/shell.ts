@@ -2,9 +2,11 @@ import "server-only"
 import { spawn } from "child_process"
 import { randomUUID } from "crypto"
 import { existsSync } from "fs"
-import { emptyTail, SHELL_MAX_LINES, tailAppend, tailLines, type Tail } from "@/lib/acp/tail-lines"
+import { emptyTail, tailAppend, tailLines, type Tail } from "@/lib/acp/tail-lines"
+import { clampInt, SHELL_LINES_MAX, SHELL_TIMEOUT_MAX } from "@/lib/settings/types"
 import type { ShellResult } from "@/lib/acp/types"
 import { HttpError } from "../http"
+import { loadSettings } from "../settings"
 import { agentEnv } from "./agent-process"
 import type { AgentSession } from "./session"
 
@@ -14,12 +16,10 @@ import type { AgentSession } from "./session"
 // already make the agent run anything in the repo. HUNK_SHELL_DISABLED=1
 // turns it off.
 //
-// Configurable (env, read on every run):
-//   HUNK_SHELL_MAX_LINES  output lines kept (shown and sent to the agent), default 150
-//   HUNK_SHELL_TIMEOUT    seconds before a command is stopped, default 300
+// Configurable (read on every run; env > settings.json > default):
+//   HUNK_SHELL_MAX_LINES / agent.shellMaxLines  output lines kept (shown and sent to the agent), default 150
+//   HUNK_SHELL_TIMEOUT / agent.shellTimeout     seconds before a command is stopped, default 300
 
-const MAX_LINES_LIMIT = 5_000
-const TIMEOUT_LIMIT_S = 24 * 60 * 60
 const KILL_GRACE_MS = 3_000
 // After the shell exits, how long background children may keep the
 // output pipes open before they're killed.
@@ -40,18 +40,19 @@ const groups: Set<number> = (g.__hunkShellGroups ??= (() => {
   return set
 })())
 
-// A positive integer env var, capped at `max`; `fallback` when unset/invalid.
-function envInt(name: string, fallback: number, max: number): number {
-  const n = Number(process.env[name])
-  return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback
+export function shellEnvLimits(): { shellMaxLines?: number; shellTimeout?: number } {
+  const lines = clampInt(process.env.HUNK_SHELL_MAX_LINES, 0, SHELL_LINES_MAX)
+  const timeout = clampInt(process.env.HUNK_SHELL_TIMEOUT, 0, SHELL_TIMEOUT_MAX)
+  return { ...(lines ? { shellMaxLines: lines } : {}), ...(timeout ? { shellTimeout: timeout } : {}) }
 }
 
-export function shellMaxLines() {
-  return envInt("HUNK_SHELL_MAX_LINES", SHELL_MAX_LINES, MAX_LINES_LIMIT)
-}
-
-function shellTimeoutMs() {
-  return envInt("HUNK_SHELL_TIMEOUT", 300, TIMEOUT_LIMIT_S) * 1000
+export async function shellLimits(): Promise<{ maxLines: number; timeoutMs: number }> {
+  const { agent } = await loadSettings()
+  const env = shellEnvLimits()
+  return {
+    maxLines: env.shellMaxLines ?? agent.shellMaxLines,
+    timeoutMs: (env.shellTimeout ?? agent.shellTimeout) * 1000,
+  }
 }
 
 function killGroup(pid: number, signal: NodeJS.Signals) {
@@ -78,14 +79,16 @@ function shellEnv(): NodeJS.ProcessEnv {
   }
 }
 
-export function runShell(session: AgentSession, command: string, share: boolean) {
+export async function runShell(session: AgentSession, command: string, share: boolean) {
   if (process.env.HUNK_SHELL_DISABLED === "1") throw new HttpError(403, "Shell commands are disabled on this server")
   const cmd = command.trim()
   if (!cmd) throw new HttpError(400, "Command is empty")
   if (cmd.length > MAX_COMMAND) throw new HttpError(400, "Command is too long")
   if (session.shell) throw new HttpError(409, "A command is still running")
+  const { maxLines, timeoutMs } = await shellLimits()
+  // Checked again: another run may have started while the settings loaded.
+  if (session.shell) throw new HttpError(409, "A command is still running")
 
-  const maxLines = shellMaxLines()
   const shellId = randomUUID()
   const started = Date.now()
   let tail: Tail = emptyTail()
@@ -126,7 +129,7 @@ export function runShell(session: AgentSession, command: string, share: boolean)
   const timeout = setTimeout(() => {
     timedOut = true
     stop()
-  }, shellTimeoutMs())
+  }, timeoutMs)
 
   const finish = (exitCode: number | null, signal: string | null, error?: string) => {
     if (finished) return
@@ -162,14 +165,14 @@ export function stopShell(session: AgentSession, shellId: string) {
 
 // The text block that tells the agent what the user ran since the last
 // prompt.
-export function shellContext(results: ShellResult[]): string {
+export function shellContext(results: ShellResult[], maxLines: number): string {
   const blocks = results.map(r => {
     const status = r.timedOut ? "timed out" : r.signal ? `killed (${r.signal})` : `exit ${r.exitCode ?? "?"}`
     const hidden = r.dropped > 0 ? `[${r.dropped} earlier lines not shown]\n` : ""
     return `<shell-command status="${status}">\n$ ${r.command}\n${hidden}${r.lines.join("\n")}\n</shell-command>`
   })
   return [
-    `The user ran these shell commands in the repo themselves (not you) before this message. The output is real; at most the last ${shellMaxLines()} lines of each.`,
+    `The user ran these shell commands in the repo themselves (not you) before this message. The output is real; at most the last ${maxLines} lines of each.`,
     ...blocks,
   ].join("\n")
 }

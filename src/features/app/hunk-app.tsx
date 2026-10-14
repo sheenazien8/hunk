@@ -18,7 +18,7 @@ import { DeletePathDialog, type DeleteRequest, DiscardDialog, type DiscardReques
 import { isDiscardAction, useGitActions } from "@/features/changes/use-git-actions"
 import { useGitStatus } from "@/features/changes/use-git-status"
 import { copyText } from "@/features/clipboard/use-copy-range"
-import { isBinaryFile } from "@/features/files/file-types"
+import { isBinaryFile, isImageFile } from "@/features/files/file-types"
 import { focusFindInput } from "@/features/find/highlight-segments"
 import { useFind } from "@/features/find/use-find"
 import type { CommitActionKind, CommitActions } from "@/features/history/commit-menu"
@@ -39,7 +39,9 @@ import { StashMenu } from "@/features/stash/stash-menu"
 import { useStash } from "@/features/stash/use-stash"
 import { ForcePushDialog } from "@/features/sync/sync-dialogs"
 import { SyncMenu } from "@/features/sync/sync-menu"
-import { useTheme } from "@/features/theme/theme"
+import { SettingsDialog } from "@/features/settings/settings-dialog"
+import { useSettings } from "@/features/settings/use-settings"
+import { applyTheme, useTheme } from "@/features/theme/theme"
 import { ViewerPanel, type ViewerHandlers } from "@/features/viewer/viewer-panel"
 import { RepoSwitcher } from "@/features/projects/repo-switcher"
 import { useWorktrees } from "@/features/worktrees/use-worktrees"
@@ -49,6 +51,7 @@ import { mentionableFiles } from "@/lib/acp/mentions"
 import { countConflicts, parseConflicts, resolveConflict } from "@/lib/git/parse-conflict"
 import { type ActionName, type ActionPayload, type Commit, type GitFile, PUSH_REJECTED, type Worktree } from "@/lib/git/types"
 import type { PluginMessage } from "@/lib/plugins/types"
+import type { SettingsPatch } from "@/lib/settings/types"
 import { ActionToast } from "./action-toast"
 import { AppHeader } from "./app-header"
 import { useKeyboardShortcuts } from "./use-keyboard-shortcuts"
@@ -75,7 +78,12 @@ function movedTabKey(file: string, entry: BufferEntry, fresh: GitFile[] | null):
 }
 
 export function HunkApp() {
-  const { isDark, toggleTheme } = useTheme()
+  const { isDark } = useTheme()
+  const settingsErrorRef = useRef<(message: string) => void>(() => {})
+  const settings = useSettings(message => settingsErrorRef.current(message))
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const { defaultDiffView, renderMarkdown } = settings.settings.viewer
+  const entryDefaults = useMemo(() => ({ viewMode: defaultDiffView, renderMarkdown }), [defaultDiffView, renderMarkdown])
   // Seed with the first project so the client always knows the active repo,
   // keeping the copy path:line action's full path honest from first load.
   // `projectDir` is the projects.json entry; `repoPath` is the worktree of it
@@ -84,7 +92,7 @@ export function HunkApp() {
   const [repoPath, setRepoPath] = useState(defaultRepo)
   const worktrees = useWorktrees(projectDir)
   const status = useGitStatus(repoPath)
-  const buffer = useBuffer(repoPath, status.loading)
+  const buffer = useBuffer(repoPath, status.loading, entryDefaults)
   const { active } = buffer
   const sidebar = useSidebar()
   const dirs = useExpandedDirs()
@@ -122,6 +130,10 @@ export function HunkApp() {
   // the view matches the Changes/Staged sections; others open raw content.
   const openFromTree = useCallback((file: string) => {
     dirs.expandAncestors(file)
+    if (isImageFile(file)) {
+      buffer.open({ file, staged: false, fromAll: true })
+      return
+    }
     const matched = status.files.find(f => f.path === file)
     buffer.open(matched
       ? { file, staged: matched.staged, fromAll: false, oldPath: matched.oldPath }
@@ -131,6 +143,10 @@ export function HunkApp() {
   // From the Changes/Staged trees.
   const openChange = useCallback((file: string, staged: boolean) => {
     dirs.expandAncestors(file)
+    if (isImageFile(file)) {
+      buffer.open({ file, staged: false, fromAll: true })
+      return
+    }
     const matched = status.files.find(f => f.path === file && f.staged === staged)
     buffer.open({ file, staged, fromAll: false, oldPath: matched?.oldPath })
   }, [status.files, buffer, dirs])
@@ -149,9 +165,9 @@ export function HunkApp() {
     buffer.update(makeTabId(repoPath, key), {
       gotoLine: { line },
       mdRender: false,
-      ...(existing?.viewMode === "blame" ? { viewMode: "split" as const } : {}),
+      ...(existing?.viewMode === "blame" ? { viewMode: defaultDiffView } : {}),
     })
-  }, [openFromTree, dirs, buffer, repoPath])
+  }, [openFromTree, dirs, buffer, repoPath, defaultDiffView])
 
   const openCommit = useCallback((sha: string, file?: string) => {
     buffer.open(commitTabKey(sha, file))
@@ -173,7 +189,7 @@ export function HunkApp() {
     dirs.expandAncestors(file)
     const key = { file, staged: false, fromAll: true }
     buffer.open(key)
-    if (!isBinaryFile(file)) {
+    if (!isBinaryFile(file) && !isImageFile(file)) {
       buffer.update(makeTabId(repoPath, key), { editMode: true, editContent: "", dirty: false, viewMode: "split", mdRender: false })
     }
     sidebar.setMobileOpen(false)
@@ -258,6 +274,26 @@ export function HunkApp() {
 
   const { busyAction, actionResult, setActionResult, runAction } = useGitActions(repoPath, afterAction, afterFailure)
   const dismissResult = useCallback(() => setActionResult(null), [setActionResult])
+
+  // --- Settings ---------------------------------------------------------------
+
+  useEffect(() => {
+    settingsErrorRef.current = message => setActionResult({ ok: false, message })
+  }, [setActionResult])
+
+  // The server's theme wins over this browser's copy (the pre-hydration
+  // script reads that copy on the next load).
+  const settingsLoaded = settings.loaded
+  const theme = settings.settings.theme
+  useEffect(() => {
+    if (settingsLoaded) applyTheme(theme)
+  }, [settingsLoaded, theme])
+
+  const updateSettings = async (patch: SettingsPatch) => {
+    const ok = await settings.update(patch)
+    if (ok && patch.files) void status.loadStatus()
+    return ok
+  }
 
   // --- File manager (sidebar Files tab) ---------------------------------------
 
@@ -446,6 +482,17 @@ export function HunkApp() {
     } else void runAction("pull", { rebase })
   }
 
+  const push = async () => {
+    if (settings.settings.git.confirmPush && !(await confirm.ask({
+      title: "Push?",
+      description: repoState.upstream && !repoState.gone
+        ? `Send ${currentBranch}'s commits to ${repoState.upstream}?`
+        : `Publish ${currentBranch} to origin?`,
+      confirmLabel: "Push",
+    }))) return
+    void runAction("push")
+  }
+
   const forcePush = async () => {
     setForcePushOpen(false)
     await runAction("push", { force: true })
@@ -534,7 +581,7 @@ export function HunkApp() {
   }, [buffer, askConfirm])
 
   const openFind = useCallback(() => {
-    if (!active || !isFileTab(active) || conflicted) return
+    if (!active || !isFileTab(active) || conflicted || isBinaryFile(active.file) || isImageFile(active.file)) return
     find.open()
     focusFindInput()
   }, [find, active, conflicted])
@@ -605,6 +652,7 @@ export function HunkApp() {
     quickOpenOpen: quickOpen.open,
     openQuickOpen: quickOpen.show,
     newFile,
+    openSettings: () => setSettingsOpen(true),
   })
 
   const viewerHandlers: ViewerHandlers = {
@@ -620,12 +668,14 @@ export function HunkApp() {
       buffer.update(entry.id, { mdRender: !entry.mdRender })
     },
     setViewMode: (entry, mode) => {
+      if (isImageFile(entry.file)) return
       buffer.update(entry.id, { viewMode: mode })
       if (mode === "raw" && (!entry.raw || entry.rawError)) void buffer.fetchRaw(entry)
     },
     delete: file => requestDelete([file]),
     toggleFind: () => (active?.findOpen ? find.close() : openFind()),
     toggleBlame: entry => {
+      if (isImageFile(entry.file)) return
       const blame = entry.viewMode !== "blame"
       buffer.update(entry.id, { viewMode: blame ? "blame" : "split" })
       if (blame && (!entry.blame || entry.blameError)) void buffer.fetchBlame(entry)
@@ -731,7 +781,7 @@ export function HunkApp() {
                 busyAction={busyAction}
                 onFetch={() => void runAction("fetch")}
                 onPull={requestPull}
-                onPush={() => void runAction("push")}
+                onPush={() => void push()}
               />
               <StashMenu
                 stashes={stash.stashes}
@@ -755,7 +805,8 @@ export function HunkApp() {
           error={status.error}
           busyAction={busyAction}
           isDark={isDark}
-          onToggleTheme={toggleTheme}
+          onToggleTheme={() => void updateSettings({ theme: isDark ? "light" : "dark" })}
+          onOpenSettings={() => setSettingsOpen(true)}
           onToggleSidebar={sidebar.toggle}
           agentOpen={agentPanel.visible}
           onToggleAgent={agentPanel.toggle}
@@ -844,6 +895,12 @@ export function HunkApp() {
           request={deleteDialog.value}
           busy={busyAction === "delete"}
           onConfirm={confirmDelete}
+        />
+        <SettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          state={{ ...settings, update: updateSettings }}
+          confirm={askConfirm}
         />
         <ConfirmDialog open={confirm.open} request={confirm.request} onConfirm={confirm.confirm} onOpenChange={confirm.onOpenChange} />
         <DiscardDialog

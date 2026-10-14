@@ -59,6 +59,7 @@ export function AppHeader(props: {
   busyAction: ActionName | null
   isDark: boolean
   onToggleTheme: () => void
+  onOpenSettings: () => void
   onToggleSidebar: () => void
   agentOpen: boolean
   onToggleAgent: () => void
@@ -103,7 +104,7 @@ export function AppHeader(props: {
             <Bot size={16} />
           </Button>
         </IconTip>
-        <AccountMenu isDark={props.isDark} onToggleTheme={props.onToggleTheme} />
+        <AccountMenu isDark={props.isDark} onToggleTheme={props.onToggleTheme} onOpenSettings={props.onOpenSettings} />
       </div>
 
       {props.operation && (

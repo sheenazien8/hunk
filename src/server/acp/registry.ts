@@ -4,13 +4,14 @@ import type { ContentBlock, SessionInfo, SessionUpdate } from "@agentclientproto
 import { base64Bytes, capUpdateImages, formatBytes, isImageType, MAX_IMAGE_BYTES, MAX_PROMPT_IMAGE_CHARS, MAX_PROMPT_IMAGES, sniffImageType, type ChatImage } from "@/lib/acp/images"
 import type { AcpAction, AgentSessionSummary } from "@/lib/acp/types"
 import { HttpError } from "../http"
+import { loadSettings } from "../settings"
 import { pluginAgentEnv, pluginMcpServers } from "../plugins/mcp"
 import { resolveInRepo } from "../repo"
 import { AgentProcess } from "./agent-process"
 import { findAgent, type AgentConfig } from "./config"
 import { AgentSession, DEFAULT_TITLE } from "./session"
 import { terminalPatches } from "./terminal-updates"
-import { runShell, shellContext, stopShell } from "./shell"
+import { runShell, shellContext, shellLimits, stopShell } from "./shell"
 
 // Bridges one agent session update into its session: known metadata is
 // tracked (title, config), terminal payloads fold into the per-terminal
@@ -187,6 +188,8 @@ export async function listPastSessions(repo: string, agentId: string | null, cur
 
 // New session, or reattach one the agent knows (session/load replays its
 // history as updates into the fresh event log; session/resume doesn't).
+// Sessions start in auto mode when settings.json says so (set before the
+// first state event, so no off → on gets logged). A live session keeps its own.
 export async function openSession(repo: string, agentId: string | null, resumeId?: string): Promise<string> {
   const agent = await findAgent(agentId)
   if (resumeId) {
@@ -195,11 +198,13 @@ export async function openSession(repo: string, agentId: string | null, resumeId
   }
   const proc = await getProcess(agent, repo)
   proc.touch()
+  const { autoApproveDefault } = (await loadSettings()).agent
   if (!resumeId) {
     const mcpServers = await pluginMcpServers(repo, proc.capabilities)
     const res = await proc.connection.newSession({ cwd: repo, mcpServers })
     const session = new AgentSession(res.sessionId, agent.id, repo)
     session.images = !!proc.capabilities.promptCapabilities?.image
+    session.autoApprove = autoApproveDefault
     registry.sessions.set(session.id, session)
     session.setConfig(res.configOptions, res.modes)
     session.pushState()
@@ -213,6 +218,7 @@ export async function openSession(repo: string, agentId: string | null, resumeId
   // Registered before loading so replayed updates land in its log.
   const session = new AgentSession(resumeId, agent.id, repo)
   session.images = !!caps.promptCapabilities?.image
+  session.autoApprove = autoApproveDefault
   registry.sessions.set(resumeId, session)
   try {
     const mcpServers = await pluginMcpServers(repo, caps)
@@ -294,9 +300,10 @@ async function prompt(session: AgentSession, text: string, files?: unknown, rawI
   const blocks = promptBlocks(session.repo, text, files, images)
   if (session.busy) throw new HttpError(409, "The agent is still working on the previous prompt")
   const proc = await processOf(session)
+  const { maxLines } = await shellLimits()
   // `!` commands run since the last prompt go first, once.
   if (session.sharedShell.length > 0) {
-    blocks.unshift({ type: "text", text: shellContext(session.sharedShell) })
+    blocks.unshift({ type: "text", text: shellContext(session.sharedShell, maxLines) })
     session.sharedShell = []
   }
   session.busy = true

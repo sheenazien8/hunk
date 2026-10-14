@@ -63,11 +63,30 @@ Every page and API route needs a login. Set these in `.env.local`:
 | File | Purpose |
 |------|---------|
 | `projects.json` | The projects you can open: `{ "projects": [{ "name", "dir", "ignore"? }] }`. Only these directories, and worktrees of them, are allowed. It is bundled at build time, so rebuild after editing. |
-| `ignore.config.json` | Global ignore patterns for the file browser (per-project `ignore` entries add to them). |
+| `settings.json` | Global settings, edited from **Settings…** in the account menu (or `Ctrl/Cmd+,`). See below. |
+| `ignore.config.json` | Global ignore patterns for the file browser (per-project `ignore` entries add to them). Superseded by the Settings dialog's ignore list once you save one there. |
 | `acp.config.json` | Agents offered in the chat: `{ "agents": [{ "id", "name", "command": [...] }] }`. |
 | `plugins.json` | Plugins: see below. |
 
-Useful environment variables: `HUNK_ALLOW_ANY_REPO=1` (lift the project allowlist), `HUNK_ACP_CONFIG` / `HUNK_PLUGINS_CONFIG` (other config paths), `HUNK_SHELL_DISABLED=1` (turn off `!command` in the chat), and `HUNK_SHELL_MAX_LINES` / `HUNK_SHELL_TIMEOUT`.
+Useful environment variables: `HUNK_ALLOW_ANY_REPO=1` (lift the project allowlist), `HUNK_ACP_CONFIG` / `HUNK_PLUGINS_CONFIG` (other config paths), `HUNK_SHELL_DISABLED=1` (turn off `!command` in the chat), `HUNK_SHELL_MAX_LINES` / `HUNK_SHELL_TIMEOUT` (override the Settings values) and `HUNK_SETTINGS_PATH` (where `settings.json` lives).
+
+### Settings
+
+The Settings dialog stores its values on the server, in `settings.json` (next to the other config files, or at `HUNK_SETTINGS_PATH`), so they follow you to every device. Changes apply right away, without a restart. See `settings.example.json` for the format. Missing or invalid values fall back to the defaults.
+
+| Section | Setting | Default |
+|---------|---------|---------|
+| Agent | **Auto mode for new sessions**: new and resumed sessions answer permission requests themselves. You can still turn it off per session. Questions from the agent are always asked. | off |
+| Agent | **Default agent**: used when the browser has no last-used agent. | first in `acp.config.json` |
+| Agent | **Shell output lines** / **Shell timeout** for `!` commands. When `HUNK_SHELL_MAX_LINES` / `HUNK_SHELL_TIMEOUT` are set, those win and the dialog shows them read-only. | 150 lines (max 5000), 300 s |
+| Viewer | **Default diff view** (split or unified) and **Render Markdown** for new tabs. | split, off |
+| Git | **Confirm before push**. | off |
+| Files | **Ignore patterns** for All Files and Quick Open. Empty = `ignore.config.json`, else the built-in list. | — |
+| Appearance | **Theme**: light, dark or system. Each browser keeps a copy, so the page loads without a flash. | system |
+
+Agent and plugin commands, the project list, `HUNK_ALLOW_ANY_REPO` and `HUNK_SHELL_DISABLED` can't be changed from the browser. Turning on auto mode for new sessions lets the agent run tools without asking, so it gets the same warning as the per-session toggle.
+
+Under Docker, `settings.json` lives inside the container. To keep it across rebuilds, mount a directory and point `HUNK_SETTINGS_PATH` into it.
 
 ## Plugins
 

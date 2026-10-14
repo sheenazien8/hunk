@@ -7,9 +7,14 @@ import { usePopover } from "@/hooks/use-popover"
 
 const itemCls = "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent focus:bg-accent focus:outline-none"
 
-// Header avatar menu: signed-in username, theme toggle and Logout. Until
-// /api/auth/me answers (or without auth) it's a settings icon with the theme only.
-export function AccountMenu({ isDark, onToggleTheme }: { isDark: boolean; onToggleTheme: () => void }) {
+// Header avatar menu: signed-in username, theme toggle, Settings… and Logout.
+// Until /api/auth/me answers (or without auth) it's a settings icon without
+// the username and Logout.
+export function AccountMenu({ isDark, onToggleTheme, onOpenSettings }: {
+  isDark: boolean
+  onToggleTheme: () => void
+  onOpenSettings: () => void
+}) {
   const router = useRouter()
   const { open, setOpen, rootRef, triggerRef } = usePopover()
   const [username, setUsername] = useState<string | null>(null)
@@ -66,6 +71,19 @@ export function AccountMenu({ isDark, onToggleTheme }: { isDark: boolean; onTogg
           >
             {isDark ? <Sun size={12} /> : <Moon size={12} />}
             {isDark ? "Light theme" : "Dark theme"}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              onOpenSettings()
+            }}
+            className={itemCls}
+          >
+            <Settings size={12} />
+            <span className="flex-1">Settings…</span>
+            <kbd className="text-[10px] text-muted-foreground">Ctrl+,</kbd>
           </button>
           {username && (
             <button type="button" role="menuitem" onClick={() => void logout()} className={itemCls}>

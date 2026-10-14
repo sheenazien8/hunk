@@ -1,6 +1,7 @@
 import "server-only"
-import { lstat, mkdir, readFile, rename, rm, writeFile } from "fs/promises"
+import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from "fs/promises"
 import path from "path"
+import { extname } from "path"
 import { topLevelPaths } from "@/lib/repo-paths"
 import { git } from "../git/exec"
 import { HttpError } from "../http"
@@ -8,6 +9,45 @@ import { resolveInRepo } from "../repo"
 
 export async function readRepoFile(repo: string, file: string): Promise<string> {
   return readFile(resolveInRepo(repo, file), "utf-8")
+}
+
+// /api/git/raw serves images from the working tree (size-capped so a huge
+// asset can't stall a tab); anything else on this route is a placeholder in
+// the viewer, never bytes or text.
+export const RAW_FILE_MAX_BYTES = 20 * 1024 * 1024
+
+const RAW_CONTENT_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+  ".svg": "image/svg+xml",
+}
+
+// Only image extensions are served, so other binary formats never reach the
+// browser through this route.
+export async function readRepoFileRaw(repo: string, file: string): Promise<{ bytes: Buffer; headers: Record<string, string> }> {
+  const abs = resolveInRepo(repo, file)
+  const info = await stat(abs).catch(e => {
+    if ((e as { code?: string }).code === "ENOENT") throw new HttpError(404, `Not found: ${file}`)
+    throw e
+  })
+  if (!info.isFile()) throw new HttpError(400, `Not a file: ${file}`)
+  if (info.size > RAW_FILE_MAX_BYTES) throw new HttpError(413, `File too large to preview (${RAW_FILE_MAX_BYTES / (1024 * 1024)} MB limit): ${file}`)
+  const contentType = RAW_CONTENT_TYPES[extname(file).toLowerCase()]
+  if (!contentType) throw new HttpError(400, `Cannot serve file type: ${file}`)
+  return {
+    bytes: await readFile(abs),
+    headers: {
+      "Content-Type": contentType,
+      "Content-Length": String(info.size),
+      "Content-Disposition": "inline",
+      "Cache-Control": "private, max-age=60",
+    },
+  }
 }
 
 export async function writeRepoFile(repo: string, file: string, content: string): Promise<void> {

@@ -15,6 +15,6 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "test/**/*.test.ts"],
-    env: { HUNK_PLUGINS_CONFIG: "/nonexistent/plugins.json" },
+    env: { HUNK_PLUGINS_CONFIG: "/nonexistent/plugins.json", HUNK_SETTINGS_PATH: "/nonexistent/settings.json" },
   },
 })

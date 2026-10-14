@@ -1,6 +1,6 @@
 import { GitCommit, RefreshCw } from "lucide-react"
 import type { BufferEntry } from "@/features/buffer/buffer"
-import { isMarkdownFile } from "@/features/files/file-types"
+import { isBinaryFile, isImageFile, isMarkdownFile } from "@/features/files/file-types"
 import { CommitDetail } from "@/features/history/commit-detail"
 import type { ConflictChoice } from "@/lib/git/parse-conflict"
 import { BlameView } from "./blame-view"
@@ -8,6 +8,7 @@ import { CodeView } from "./code-view"
 import { ConflictView } from "./conflict-view"
 import { DiffView } from "./diff-view"
 import { EditView } from "./edit-view"
+import { BinaryPlaceholder, ImageView } from "./image-view"
 import { MarkdownView } from "./markdown-view"
 
 function Spinner() {
@@ -80,6 +81,13 @@ export function FileViewer({ entry, repoPath, fullPath, conflicted, onEditChange
     ) : (
       <Spinner />
     )
+  } else if (entry.plugin) {
+    // Plugin tabs render in their own frame outside this component.
+    body = null
+  } else if (isImageFile(entry.file)) {
+    body = <ImageView key={entry.id} repoPath={repoPath} file={entry.file} />
+  } else if (isBinaryFile(entry.file)) {
+    body = <BinaryPlaceholder file={entry.file} />
   } else if (entry.diffLoading && !entry.fromAll && !(conflicted && entry.raw)) {
     body = <Spinner />
   } else if (conflicted) {

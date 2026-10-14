@@ -15,6 +15,7 @@ interface Shortcuts {
   quickOpenOpen: boolean
   openQuickOpen: () => void
   newFile: () => void
+  openSettings: () => void
 }
 
 // Global shortcuts:
@@ -24,6 +25,7 @@ interface Shortcuts {
 //   Ctrl/Cmd+B        toggle the sidebar (VS Code muscle memory)
 //   Ctrl/Cmd+I        toggle the agent panel
 //   Ctrl/Cmd+Alt+N    new file (in the sidebar's target folder)
+//   Ctrl/Cmd+,        settings
 //   Ctrl/Cmd+S        save while editing (or resolving conflicts)
 //   Ctrl/Cmd+W        close the active tab
 //   Ctrl/Cmd+(Shift+)Tab, Ctrl/Cmd+PageUp/PageDown   cycle tabs
@@ -36,7 +38,7 @@ export function useKeyboardShortcuts(shortcuts: Shortcuts) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const { active, entries, activate, requestClose, openFind, closeFind, toggleSidebar, toggleAgent, save, quickOpenOpen, openQuickOpen, newFile } = ref.current
+      const { active, entries, activate, requestClose, openFind, closeFind, toggleSidebar, toggleAgent, save, quickOpenOpen, openQuickOpen, newFile, openSettings } = ref.current
       if (quickOpenOpen) return
       if (e.key === "Escape") {
         if (active?.findOpen) {
@@ -54,6 +56,9 @@ export function useKeyboardShortcuts(shortcuts: Shortcuts) {
       } else if (key === "f" && active && !active.editMode && isFileTab(active)) {
         e.preventDefault()
         openFind()
+      } else if (key === "," && !e.shiftKey && !e.altKey) {
+        e.preventDefault()
+        openSettings()
       } else if (e.code === "KeyN" && e.altKey && !e.shiftKey) {
         // e.code: on macOS Option+N types a dead key instead of "n".
         e.preventDefault()

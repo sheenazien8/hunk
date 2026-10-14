@@ -53,6 +53,18 @@ const isTurnEnd = (e: AcpEvent) => e.type === "turn_end"
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1]).toString("base64")
 
+async function withSettings(settings: unknown, fn: () => Promise<void>) {
+  const prev = process.env.HUNK_SETTINGS_PATH
+  const file = path.join(tmp, `settings-${Math.random().toString(36).slice(2)}.json`)
+  writeFileSync(file, JSON.stringify(settings))
+  process.env.HUNK_SETTINGS_PATH = file
+  try {
+    await fn()
+  } finally {
+    process.env.HUNK_SETTINGS_PATH = prev
+  }
+}
+
 describe("config", () => {
   it("falls back to claude-agent-acp for a missing file", async () => {
     expect(await loadAgents(path.join(tmp, "nope.json"))).toEqual([{ id: "claude", name: "Claude", command: ["claude-agent-acp"] }])
@@ -149,6 +161,20 @@ describe("registry with a fake agent", () => {
     const events = await done
     expect(events.some(e => e.type === "permission_resolved" && e.auto && e.optionId === "yes")).toBe(true)
     expect(session.pendingCount).toBe(0)
+  })
+
+  it("starts in auto mode when settings say so", async () => {
+    await withSettings({ agent: { autoApproveDefault: true } }, async () => {
+      const session = getSession(await openSession(repoDir("auto-default"), "fake"))
+      // No off → on in the log: the first state already has it.
+      const states = session.since(0).events.flatMap(e => (e.event.type === "state" ? [e.event.state.autoApprove] : []))
+      expect(states).toEqual([true])
+      const done = waitFor(session, isTurnEnd)
+      await runAction(session, { action: "prompt", text: "edit" })
+      const events = await done
+      expect(events.some(e => e.type === "permission_resolved" && e.auto && e.optionId === "yes")).toBe(true)
+      expect(session.pendingCount).toBe(0)
+    })
   })
 
   it("replays the log after a Last-Event-ID", async () => {
@@ -437,6 +463,19 @@ describe("shell commands", () => {
       delete process.env.HUNK_SHELL_MAX_LINES
       delete process.env.HUNK_SHELL_TIMEOUT
     }
+  })
+
+  it("takes its limits from settings, with env overriding them", async () => {
+    const session = getSession(await openSession(repoDir("shell-settings"), "fake"))
+    await withSettings({ agent: { shellMaxLines: 5 } }, async () => {
+      try {
+        expect(resultOf(await shell(session, "seq 1 100")).lines).toEqual(["96", "97", "98", "99", "100"])
+        process.env.HUNK_SHELL_MAX_LINES = "7"
+        expect(resultOf(await shell(session, "seq 1 100")).lines).toHaveLength(7)
+      } finally {
+        delete process.env.HUNK_SHELL_MAX_LINES
+      }
+    })
   })
 
   it("can be turned off", async () => {

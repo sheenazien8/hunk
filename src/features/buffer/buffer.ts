@@ -1,3 +1,4 @@
+import { isMarkdownFile } from "@/features/files/file-types"
 import { isUnder, remapPath } from "@/features/sidebar/file-ops"
 import type { BlameResponse, CommitResponse } from "@/lib/git/types"
 
@@ -85,7 +86,14 @@ export function makeTabId(repo: string, { file, staged, fromAll, commit, plugin 
   return `${repo}::${file}::${staged ? "s" : "u"}::${fromAll ? "a" : "d"}`
 }
 
-export function newEntry(repo: string, key: TabKey): BufferEntry {
+export interface EntryDefaults {
+  viewMode: "split" | "unified"
+  renderMarkdown: boolean
+}
+
+export const DEFAULT_ENTRY: EntryDefaults = { viewMode: "split", renderMarkdown: false }
+
+export function newEntry(repo: string, key: TabKey, defaults: EntryDefaults = DEFAULT_ENTRY): BufferEntry {
   const { file, staged, fromAll, oldPath, commit, commitFile, plugin } = key
   return {
     id: makeTabId(repo, key),
@@ -97,8 +105,8 @@ export function newEntry(repo: string, key: TabKey): BufferEntry {
     raw: "",
     rawError: "",
     md: "",
-    mdRender: false,
-    viewMode: "split",
+    mdRender: defaults.renderMarkdown && !commit && !plugin && isMarkdownFile(file),
+    viewMode: defaults.viewMode,
     editMode: false,
     editContent: "",
     dirty: false,
@@ -255,13 +263,13 @@ function tabsStorageKey(repo: string) {
   return `${TABS_STORAGE_PREFIX}${b64}`
 }
 
-export function readPersistedBuffer(repo: string): BufferState {
+export function readPersistedBuffer(repo: string, defaults?: EntryDefaults): BufferState {
   try {
     const raw = localStorage.getItem(tabsStorageKey(repo))
     if (!raw) return emptyBuffer
     const parsed = JSON.parse(raw) as PersistedBuffer
     if (!parsed || !Array.isArray(parsed.tabs)) return emptyBuffer
-    const entries = parsed.tabs.map(t => newEntry(repo, t))
+    const entries = parsed.tabs.map(t => newEntry(repo, t, defaults))
     const activeId = parsed.activeId && entries.some(b => b.id === parsed.activeId)
       ? parsed.activeId
       : entries[0]?.id ?? null
