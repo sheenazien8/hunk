@@ -1,0 +1,19 @@
+{
+  "agent": {
+    "autoApproveDefault": false,
+    "defaultAgent": "",
+    "shellMaxLines": 150,
+    "shellTimeout": 300
+  },
+  "viewer": {
+    "defaultDiffView": "split",
+    "renderMarkdown": false
+  },
+  "git": {
+    "confirmPush": false
+  },
+  "files": {
+    "ignore": null
+  },
+  "theme": "system"
+}
