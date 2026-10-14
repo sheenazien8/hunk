@@ -79,6 +79,14 @@ body {
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
 
+/* highlight.js styles github.css sets `pre code.hljs { overflow-x: auto }`,
+   which makes <code> the horizontal scroller and desyncs the wrapper <pre>
+   (edit-view mirror + CodeView gutter). Neutralize it so the <pre>/textarea
+   owns horizontal scrolling. Needs !important: the source rule is (0,1,2). */
+code.hljs {
+  overflow-x: visible !important;
+}
+
 /* Syntax highlighting: GitHub Dark overrides (base github.css is light) */
 .dark .hljs {
   color: #c9d1d9;
