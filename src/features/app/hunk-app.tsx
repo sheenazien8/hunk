@@ -28,7 +28,11 @@ import { PluginMenu } from "@/features/plugins/plugin-menu"
 import { usePlugins } from "@/features/plugins/use-plugins"
 import { QuickOpen } from "@/features/quick-open/quick-open"
 import { useQuickOpen } from "@/features/quick-open/use-quick-open"
-import { defaultRepo, selectionFromUrl, syncRepoToUrl } from "@/features/projects/projects"
+import { SearchDialog } from "@/features/search/search-dialog"
+import { useSearch } from "@/features/search/use-search"
+import { parentDir, selectionFromUrl, syncRepoToUrl } from "@/features/projects/projects"
+import { ProjectDialog, RemoveProjectDialog } from "@/features/projects/project-dialogs"
+import { useProjects } from "@/features/projects/use-projects"
 import { countFilesUnder, isUnder, moveTargets, topLevelPaths } from "@/features/sidebar/file-ops"
 import { MoveDialog } from "@/features/sidebar/move-dialog"
 import { SidebarContent, type SidebarTab } from "@/features/sidebar/sidebar-content"
@@ -49,7 +53,7 @@ import { AddWorktreeDialog, type NewWorktree, type NewWorktreeSeed, RemoveWorktr
 import { samePath } from "@/features/worktrees/worktrees"
 import { mentionableFiles } from "@/lib/acp/mentions"
 import { countConflicts, parseConflicts, resolveConflict } from "@/lib/git/parse-conflict"
-import { type ActionName, type ActionPayload, type Commit, type GitFile, PUSH_REJECTED, type Worktree } from "@/lib/git/types"
+import { type ActionName, type ActionPayload, type Commit, type GitFile, type Project, type ProjectInput, PUSH_REJECTED, type Worktree } from "@/lib/git/types"
 import type { PluginMessage } from "@/lib/plugins/types"
 import type { SettingsPatch } from "@/lib/settings/types"
 import { ActionToast } from "./action-toast"
@@ -81,15 +85,17 @@ export function HunkApp() {
   const { isDark } = useTheme()
   const settingsErrorRef = useRef<(message: string) => void>(() => {})
   const settings = useSettings(message => settingsErrorRef.current(message))
+  const projectsErrorRef = useRef<(message: string) => void>(() => {})
+  const projectState = useProjects(message => projectsErrorRef.current(message))
   const [settingsOpen, setSettingsOpen] = useState(false)
   const { defaultDiffView, renderMarkdown } = settings.settings.viewer
   const entryDefaults = useMemo(() => ({ viewMode: defaultDiffView, renderMarkdown }), [defaultDiffView, renderMarkdown])
-  // Seed with the first project so the client always knows the active repo,
-  // keeping the copy path:line action's full path honest from first load.
-  // `projectDir` is the projects.json entry; `repoPath` is the worktree of it
-  // every git call runs in (the project dir itself unless one is picked).
-  const [projectDir, setProjectDir] = useState(defaultRepo)
-  const [repoPath, setRepoPath] = useState(defaultRepo)
+  // Seeded once the project list arrives (see the initial-load effect): the
+  // first project, unless the URL picks another. `projectDir` is the
+  // projects.json entry; `repoPath` is the worktree of it every git call runs
+  // in (the project dir itself unless one is picked).
+  const [projectDir, setProjectDir] = useState("")
+  const [repoPath, setRepoPath] = useState("")
   const worktrees = useWorktrees(projectDir)
   const status = useGitStatus(repoPath)
   const buffer = useBuffer(repoPath, status.loading, entryDefaults)
@@ -108,6 +114,10 @@ export function HunkApp() {
   const [addWorktree, setAddWorktree] = useState<{ open: boolean; seed?: NewWorktreeSeed; key: number }>({ open: false, key: 0 })
   const showAddWorktree = (seed?: NewWorktreeSeed) => setAddWorktree(prev => ({ open: true, seed, key: prev.key + 1 }))
   const removeWorktreeDialog = useDialog<Worktree>()
+  // Add/edit dialog: `project` set = edit; a key so each opening remounts it.
+  const [projectDialog, setProjectDialog] = useState<{ open: boolean; project?: Project; key: number }>({ open: false, key: 0 })
+  const [projectBusy, setProjectBusy] = useState(false)
+  const removeProjectDialog = useDialog<Project>()
   const history = useHistory(repoPath)
   const branches = useBranches(repoPath)
   const stash = useStash(repoPath)
@@ -151,8 +161,8 @@ export function HunkApp() {
     buffer.open({ file, staged, fromAll: false, oldPath: matched?.oldPath })
   }, [status.files, buffer, dirs])
 
-  // From Quick Open. With a line, open the file itself (not its diff) so the
-  // line can be scrolled to, like an editor would.
+  // From Quick Open and Search in files. With a line, open the file itself
+  // (not its diff) so the line can be scrolled to, like an editor would.
   const openFromQuickOpen = useCallback((file: string, line?: number) => {
     if (line === undefined) {
       openFromTree(file)
@@ -279,6 +289,7 @@ export function HunkApp() {
 
   useEffect(() => {
     settingsErrorRef.current = message => setActionResult({ ok: false, message })
+    projectsErrorRef.current = message => setActionResult({ ok: false, message })
   }, [setActionResult])
 
   // The server's theme wins over this browser's copy (the pre-hydration
@@ -380,6 +391,7 @@ export function HunkApp() {
   const repoFiles = useMemo(() => mentionableFiles(status.allFiles), [status.allFiles])
   const changedFiles = useMemo(() => [...new Set(status.files.map(f => f.path))], [status.files])
   const quickOpen = useQuickOpen()
+  const search = useSearch(repoPath)
   // Open file tabs, most recent first, the active one left out.
   const recentFiles = useMemo(
     () => [...new Set(buffer.entries.filter(b => isFileTab(b) && b.id !== buffer.activeId).map(b => b.file).reverse())],
@@ -603,7 +615,7 @@ export function HunkApp() {
     status.clear()
     dirs.reset()
     buffer.restore(next)
-    syncRepoToUrl({ project, repo: next })
+    syncRepoToUrl({ project, repo: next }, projectState.projects)
     void status.loadStatus(next)
     return true
   }
@@ -624,20 +636,77 @@ export function HunkApp() {
     await runAction("removeWorktree", { path: target.path, force })
   }
 
-  // First load: apply ?project=<name>&worktree=<path>, restore that repo's
-  // tabs, load status.
+  // --- Projects ---------------------------------------------------------------
+
+  const showAddProject = () => setProjectDialog(prev => ({ open: true, key: prev.key + 1 }))
+  const showEditProject = (project: Project) => setProjectDialog(prev => ({ open: true, project, key: prev.key + 1 }))
+
+  // Add or edit, then point the app at the new dir when the open project moved.
+  const saveProject = async (input: ProjectInput): Promise<boolean> => {
+    const editing = projectDialog.project
+    // updateProject keeps the entry's position, so the edited row is the one
+    // still at its old index (the server's resolved dir may differ from what
+    // the user typed).
+    const index = editing ? projectState.projects.findIndex(p => samePath(p.dir, editing.dir)) : -1
+    setProjectBusy(true)
+    try {
+      const list = editing
+        ? await projectState.update(editing.dir, input)
+        : await projectState.add(input)
+      const next = index >= 0 ? list[index] : list[list.length - 1]
+      if (next && editing && samePath(editing.dir, projectDir)) {
+        await switchRepo(next.dir, next.dir)
+      }
+      return true
+    } catch (e) {
+      setActionResult({ ok: false, message: e instanceof Error ? e.message : "Failed to save project" })
+      return false
+    } finally {
+      setProjectBusy(false)
+    }
+  }
+
+  // Remove, falling back to the first remaining project when the open one goes.
+  const confirmRemoveProject = async () => {
+    const target = removeProjectDialog.value
+    if (!target) return
+    removeProjectDialog.setOpen(false)
+    setProjectBusy(true)
+    try {
+      const list = await projectState.remove(target.dir)
+      if (samePath(target.dir, projectDir)) {
+        const fallback = list[0]?.dir ?? ""
+        if (fallback) await switchRepo(fallback, fallback)
+        else {
+          setProjectDir("")
+          setRepoPath("")
+          status.clear()
+          dirs.reset()
+          buffer.restore("")
+        }
+      }
+    } catch (e) {
+      setActionResult({ ok: false, message: e instanceof Error ? e.message : "Failed to remove project" })
+    } finally {
+      setProjectBusy(false)
+    }
+  }
+
+  // First load: once projects.json has arrived, apply
+  // ?project=<name>&worktree=<path>, restore that repo's tabs, load status.
   const didInitialLoadRef = useRef(false)
   useEffect(() => {
-    if (didInitialLoadRef.current) return
+    if (didInitialLoadRef.current || !projectState.loaded) return
     didInitialLoadRef.current = true
-    const selection = selectionFromUrl() ?? { project: projectDir, repo: repoPath }
+    const selection = selectionFromUrl(projectState.projects) ?? { project: projectDir, repo: repoPath }
+    if (!selection.project && !selection.repo) return
     /* eslint-disable react-hooks/set-state-in-effect -- one-shot URL → state hydration on mount */
     if (selection.project !== projectDir) setProjectDir(selection.project)
     if (selection.repo !== repoPath) setRepoPath(selection.repo)
     /* eslint-enable react-hooks/set-state-in-effect */
     buffer.restore(selection.repo)
     void status.loadStatus(selection.repo)
-  }, [projectDir, repoPath, buffer, status])
+  }, [projectState.loaded, projectState.projects, projectDir, repoPath, buffer, status])
 
   useKeyboardShortcuts({
     active,
@@ -649,8 +718,9 @@ export function HunkApp() {
     toggleSidebar: sidebar.toggle,
     toggleAgent: agentPanel.toggle,
     save: editing.saveFile,
-    quickOpenOpen: quickOpen.open,
+    paletteOpen: quickOpen.open || search.open,
     openQuickOpen: quickOpen.show,
+    openSearch: search.show,
     newFile,
     openSettings: () => setSettingsOpen(true),
   })
@@ -752,14 +822,18 @@ export function HunkApp() {
           contextControls={
             <>
               <RepoSwitcher
+                projects={projectState.projects}
                 projectDir={projectDir}
                 repoPath={repoPath}
                 worktrees={worktrees.worktrees}
-                busy={!!busyAction}
+                busy={!!busyAction || projectBusy}
                 onSelectProject={dir => void switchRepo(dir, dir)}
                 onSelectWorktree={path => void switchRepo(path)}
                 onAddWorktree={() => showAddWorktree()}
                 onRemoveWorktree={removeWorktreeDialog.show}
+                onAddProject={showAddProject}
+                onEditProject={showEditProject}
+                onRemoveProject={removeProjectDialog.show}
               />
               <span aria-hidden className="hidden text-muted-foreground/50 sm:inline">/</span>
               <BranchPicker
@@ -812,6 +886,7 @@ export function HunkApp() {
           onToggleAgent={agentPanel.toggle}
           onOpenMobileSidebar={() => sidebar.setMobileOpen(true)}
           onQuickOpen={quickOpen.show}
+          onSearch={search.show}
           tools={<PluginMenu plugins={plugins ?? []} onOpen={openPlugin} />}
           operation={repoState.operation}
           onContinueOperation={() => void runAction("continueOperation")}
@@ -880,6 +955,7 @@ export function HunkApp() {
           changed={status.files}
           onOpen={openFromQuickOpen}
         />
+        <SearchDialog search={search} onOpen={openFromQuickOpen} />
         <MoveDialog
           open={moveDialog.open}
           onOpenChange={moveDialog.setOpen}
@@ -942,6 +1018,22 @@ export function HunkApp() {
           worktree={removeWorktreeDialog.value}
           busy={busyAction === "removeWorktree"}
           onConfirm={confirmRemoveWorktree}
+        />
+        <ProjectDialog
+          key={projectDialog.key}
+          open={projectDialog.open}
+          onOpenChange={open => setProjectDialog(prev => ({ ...prev, open }))}
+          project={projectDialog.project}
+          defaultDir={parentDir(projectDir)}
+          busy={projectBusy}
+          onSave={saveProject}
+        />
+        <RemoveProjectDialog
+          open={removeProjectDialog.open}
+          onOpenChange={removeProjectDialog.setOpen}
+          project={removeProjectDialog.value}
+          busy={projectBusy}
+          onConfirm={confirmRemoveProject}
         />
       </div>
     </TooltipProvider>

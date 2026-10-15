@@ -15,6 +15,10 @@ import type {
   ContentResponse,
   DiffResponse,
   LogResponse,
+  ProjectInput,
+  ProjectsResponse,
+  SearchOptions,
+  SearchResponse,
   StashResponse,
   StatusResponse,
   WorktreesResponse,
@@ -50,6 +54,24 @@ export const api = {
     return (await request<PluginsResponse>("/api/plugins")).plugins
   },
 
+  projects: {
+    async list() {
+      return (await request<ProjectsResponse>("/api/projects")).projects
+    },
+
+    async add(project: ProjectInput) {
+      return (await request<ProjectsResponse>("/api/projects", json("POST", project))).projects
+    },
+
+    async update(dir: string, project: ProjectInput) {
+      return (await request<ProjectsResponse>("/api/projects", json("PATCH", { dir, next: project }))).projects
+    },
+
+    async remove(dir: string) {
+      return (await request<ProjectsResponse>(`/api/projects?${query({ dir })}`, { method: "DELETE" })).projects
+    },
+  },
+
   status(repo: string) {
     return request<StatusResponse>(`/api/git/status?${query({ repo })}`)
   },
@@ -70,6 +92,20 @@ export const api = {
   // One file's change in a commit.
   async commitDiff(repo: string, commit: string, file: string, oldPath?: string) {
     return (await request<DiffResponse>(`/api/git/diff?${query({ repo, commit, file, oldPath })}`)).diff
+  },
+
+  search(repo: string, opts: SearchOptions, signal?: AbortSignal) {
+    const flag = (on?: boolean) => (on ? "1" : undefined)
+    const qs = query({
+      repo,
+      q: opts.query,
+      case: flag(opts.caseSensitive),
+      word: flag(opts.wholeWord),
+      regex: flag(opts.regex),
+      include: opts.include || undefined,
+      exclude: opts.exclude || undefined,
+    })
+    return request<SearchResponse>(`/api/git/search?${qs}`, { signal })
   },
 
   blame(repo: string, file: string, ref?: string) {

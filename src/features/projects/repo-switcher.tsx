@@ -1,10 +1,9 @@
 import { type ReactNode, useState } from "react"
-import { Check, ChevronDown, Folder, FolderGit2, FolderPlus, Search, Trash2 } from "lucide-react"
+import { Check, ChevronDown, Folder, FolderGit2, FolderPlus, Pencil, Search, Trash2 } from "lucide-react"
 import { moveOptionFocus, usePopover } from "@/hooks/use-popover"
 import { findWorktree, samePath, tailPath, worktreeLabel } from "@/features/worktrees/worktrees"
-import type { Worktree } from "@/lib/git/types"
+import type { Project, Worktree } from "@/lib/git/types"
 import { cn } from "@/lib/utils"
-import { projects } from "./projects"
 
 function Group({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -53,7 +52,8 @@ function Row({ icon, name, path, active, disabled, onSelect, children }: {
 // Header breadcrumb root: the current project (and linked worktree, if one is
 // open). Opens one searchable list to switch project or worktree, add a
 // worktree, or remove one — the Zed / JetBrains "project widget".
-export function RepoSwitcher({ projectDir, repoPath, worktrees, busy, onSelectProject, onSelectWorktree, onAddWorktree, onRemoveWorktree }: {
+export function RepoSwitcher({ projects, projectDir, repoPath, worktrees, busy, onSelectProject, onSelectWorktree, onAddWorktree, onRemoveWorktree, onAddProject, onEditProject, onRemoveProject }: {
+  projects: Project[]
   projectDir: string
   repoPath: string
   worktrees: Worktree[]
@@ -62,6 +62,9 @@ export function RepoSwitcher({ projectDir, repoPath, worktrees, busy, onSelectPr
   onSelectWorktree: (path: string) => void
   onAddWorktree: () => void
   onRemoveWorktree: (worktree: Worktree) => void
+  onAddProject: () => void
+  onEditProject: (project: Project) => void
+  onRemoveProject: (project: Project) => void
 }) {
   const { open, setOpen, rootRef, triggerRef } = usePopover()
   const [filter, setFilter] = useState("")
@@ -168,7 +171,28 @@ export function RepoSwitcher({ projectDir, repoPath, worktrees, busy, onSelectPr
                     path={p.dir}
                     active={samePath(p.dir, projectDir)}
                     onSelect={() => !samePath(p.dir, projectDir) && run(() => onSelectProject(p.dir))}
-                  />
+                  >
+                    <button
+                      type="button"
+                      title={`Edit ${p.name}…`}
+                      aria-label={`Edit project ${p.name}`}
+                      disabled={busy}
+                      onClick={() => run(() => onEditProject(p))}
+                      className="ml-0.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      title={`Remove ${p.name}…`}
+                      aria-label={`Remove project ${p.name}`}
+                      disabled={busy}
+                      onClick={() => run(() => onRemoveProject(p))}
+                      className="ml-0.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive disabled:opacity-50"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </Row>
                 ))}
               </Group>
             )}
@@ -180,6 +204,10 @@ export function RepoSwitcher({ projectDir, repoPath, worktrees, busy, onSelectPr
             <button type="button" role="option" aria-selected={false} disabled={busy} onClick={() => run(onAddWorktree)} className={rowCls}>
               <FolderPlus size={12} className="shrink-0 text-primary" />
               <span className="flex-1">New worktree…</span>
+            </button>
+            <button type="button" role="option" aria-selected={false} disabled={busy} onClick={() => run(onAddProject)} className={rowCls}>
+              <FolderPlus size={12} className="shrink-0 text-primary" />
+              <span className="flex-1">Add project…</span>
             </button>
           </div>
         </div>

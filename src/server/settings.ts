@@ -20,9 +20,9 @@ export async function loadSettings(file = settingsPath()): Promise<Settings> {
 }
 
 // The file a write should replace: the target of a symlink (deploy-host.sh
-// links settings.json into .next/standalone), so the rename doesn't swap the
-// link for a plain file.
-async function writeTarget(file: string): Promise<string> {
+// links settings.json/projects.json into .next/standalone), so the rename
+// doesn't swap the link for a plain file.
+export async function writeTarget(file: string): Promise<string> {
   try {
     return await realpath(file)
   } catch {

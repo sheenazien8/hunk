@@ -1,5 +1,30 @@
 // Shared API contract between the /api/git/* route handlers and the client.
 
+// A repository Hunk may open, as stored in projects.json.
+export interface Project {
+  name: string
+  dir: string
+  // Extra ignore patterns for the All Files walk.
+  ignore?: string[]
+}
+
+export interface ProjectInput {
+  name: string
+  dir: string
+  ignore?: string[]
+}
+
+// PATCH /api/projects: the current dir identifies the entry, `next` is the
+// replacement (a dir change moves its identity).
+export interface ProjectPatch {
+  dir: string
+  next: ProjectInput
+}
+
+export interface ProjectsResponse {
+  projects: Project[]
+}
+
 // "conflicted" = an unmerged path (merge/rebase/stash conflict); reported
 // once, on the unstaged side.
 export type FileStatus = "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflicted"
@@ -267,4 +292,37 @@ export interface ActionResponse {
 
 export interface ErrorResponse {
   error: string
+}
+
+// GET /api/git/search — content search over the repo's tracked and untracked
+// (not git-ignored) text files.
+export interface SearchOptions {
+  query: string
+  caseSensitive?: boolean
+  wholeWord?: boolean
+  regex?: boolean
+  // Comma-separated globs ("*.ts, src/"); a bare name matches at any depth.
+  include?: string
+  exclude?: string
+}
+
+export interface SearchMatch {
+  line: number
+  // The matching line, cut down to a preview around the first match.
+  text: string
+  // [start, end) offsets of the matches within `text`.
+  ranges: [number, number][]
+}
+
+export interface SearchFileResult {
+  path: string
+  matches: SearchMatch[]
+}
+
+export interface SearchResponse {
+  files: SearchFileResult[]
+  // Matching lines returned (at most the server's limit).
+  total: number
+  // The limit was hit; there are more matches than shown.
+  truncated: boolean
 }

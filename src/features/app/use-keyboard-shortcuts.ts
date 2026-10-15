@@ -11,9 +11,10 @@ interface Shortcuts {
   toggleSidebar: () => void
   toggleAgent: () => void
   save: () => void
-  // Quick Open: while it's open it handles its own keys.
-  quickOpenOpen: boolean
+  // Quick Open / Search in files: while one is open it handles its own keys.
+  paletteOpen: boolean
   openQuickOpen: () => void
+  openSearch: () => void
   newFile: () => void
   openSettings: () => void
 }
@@ -21,6 +22,7 @@ interface Shortcuts {
 // Global shortcuts:
 //   Esc               close the find bar
 //   Ctrl/Cmd+P        Quick Open (go to file), even from text fields
+//   Ctrl/Cmd+Shift+F  search in files, even from text fields
 //   Ctrl/Cmd+F        find in file (not while editing)
 //   Ctrl/Cmd+B        toggle the sidebar (VS Code muscle memory)
 //   Ctrl/Cmd+I        toggle the agent panel
@@ -38,8 +40,8 @@ export function useKeyboardShortcuts(shortcuts: Shortcuts) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const { active, entries, activate, requestClose, openFind, closeFind, toggleSidebar, toggleAgent, save, quickOpenOpen, openQuickOpen, newFile, openSettings } = ref.current
-      if (quickOpenOpen) return
+      const { active, entries, activate, requestClose, openFind, closeFind, toggleSidebar, toggleAgent, save, paletteOpen, openQuickOpen, openSearch, newFile, openSettings } = ref.current
+      if (paletteOpen) return
       if (e.key === "Escape") {
         if (active?.findOpen) {
           e.preventDefault()
@@ -53,6 +55,9 @@ export function useKeyboardShortcuts(shortcuts: Shortcuts) {
         // Also stops the browser's print dialog.
         e.preventDefault()
         openQuickOpen()
+      } else if (key === "f" && e.shiftKey && !e.altKey) {
+        e.preventDefault()
+        openSearch()
       } else if (key === "f" && active && !active.editMode && isFileTab(active)) {
         e.preventDefault()
         openFind()

@@ -1,6 +1,6 @@
 import path from "path"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { projects } from "./config"
+import { listProjects } from "./config"
 import { HttpError } from "./http"
 import { resolveInRepo, resolveRepo } from "./repo"
 
@@ -21,11 +21,11 @@ describe("resolveRepo", () => {
   afterEach(() => vi.unstubAllEnvs())
 
   it("defaults to the first project", async () => {
-    expect(await resolveRepo(null)).toBe(projects[0].dir)
+    expect(await resolveRepo(null)).toBe(listProjects()[0].dir)
   })
 
   it("accepts listed projects, including an equivalent spelling", async () => {
-    expect(await resolveRepo(projects[0].dir + "/")).toBe(projects[0].dir + "/")
+    expect(await resolveRepo(listProjects()[0].dir + "/")).toBe(listProjects()[0].dir + "/")
   })
 
   it("rejects unlisted repos with 403", async () => {

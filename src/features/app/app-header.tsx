@@ -1,8 +1,9 @@
 import type { ReactNode } from "react"
-import { Bot, Check, GitBranch, Menu, PanelLeft, RefreshCw, Search, TriangleAlert, X } from "lucide-react"
+import { Bot, Check, Menu, PanelLeft, RefreshCw, Search, TextSearch, TriangleAlert, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { AccountMenu } from "@/features/auth/account-menu"
+import { HunkMark } from "@/features/app/hunk-mark"
 import type { ActionName, GitOperation } from "@/lib/git/types"
 
 function IconTip({ tip, children }: { tip: string; children: ReactNode }) {
@@ -65,6 +66,7 @@ export function AppHeader(props: {
   onToggleAgent: () => void
   onOpenMobileSidebar: () => void
   onQuickOpen: () => void
+  onSearch: () => void
   tools?: ReactNode
   operation?: GitOperation
   onContinueOperation: () => void
@@ -81,12 +83,17 @@ export function AppHeader(props: {
         <Button variant="ghost" size="icon" className="hidden h-8 w-8 md:inline-flex" title="Toggle sidebar (Ctrl+B)" onClick={props.onToggleSidebar}>
           <PanelLeft size={16} />
         </Button>
-        <GitBranch size={18} className="hidden text-muted-foreground sm:block" />
+        <HunkMark size={18} className="hidden text-foreground sm:block" />
         <h1 className="hidden text-base font-semibold sm:block">Hunk</h1>
         <span aria-hidden className="mx-1 hidden h-5 w-px bg-border sm:block" />
         <div className="flex min-w-0 items-center gap-1">{props.contextControls}</div>
         <div className="flex-1" />
         {props.tools}
+        <IconTip tip="Search in files (Ctrl+Shift+F)">
+          <Button variant="outline" size="icon" className="h-9 w-9" aria-label="Search in files" onClick={props.onSearch}>
+            <TextSearch size={16} />
+          </Button>
+        </IconTip>
         <IconTip tip="Go to file (Ctrl+P)">
           <Button variant="outline" size="icon" className="h-9 w-9" aria-label="Go to file" onClick={props.onQuickOpen}>
             <Search size={16} />

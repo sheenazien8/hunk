@@ -1,5 +1,5 @@
 import "server-only"
-import { execFile } from "child_process"
+import { execFile, spawn } from "child_process"
 import { promisify } from "util"
 import { HttpError } from "../http"
 
@@ -42,6 +42,68 @@ export async function git(repo: string, args: string[], opts: GitOptions = {}): 
     }
     throw e
   }
+}
+
+export interface GitLinesResult {
+  // onLine asked to stop, so git was killed before it finished.
+  stopped: boolean
+  timedOut: boolean
+}
+
+// Runs git and hands stdout to `onLine` one line at a time, for output too big
+// to buffer (e.g. grep over a whole repo). Returning false from `onLine` kills
+// git. Fails like git() on any other exit code, with stderr on the error.
+export function gitLines(
+  repo: string,
+  args: string[],
+  onLine: (line: string) => boolean | void,
+  opts: Pick<GitOptions, "okExitCodes" | "timeout"> = {},
+): Promise<GitLinesResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, { cwd: repo, stdio: ["ignore", "pipe", "pipe"] })
+    let stopped = false
+    let timedOut = false
+    let rest = ""
+    let stderr = ""
+    const stop = () => {
+      stopped = true
+      child.stdout.removeAllListeners("data")
+      child.kill()
+    }
+    const timer = opts.timeout ? setTimeout(() => {
+      timedOut = true
+      stop()
+    }, opts.timeout) : undefined
+
+    child.stdout.setEncoding("utf8")
+    child.stdout.on("data", (chunk: string) => {
+      const lines = (rest + chunk).split("\n")
+      rest = lines.pop() ?? ""
+      for (const line of lines) {
+        if (onLine(line) === false) {
+          stop()
+          return
+        }
+      }
+    })
+    child.stderr.setEncoding("utf8")
+    child.stderr.on("data", (chunk: string) => {
+      if (stderr.length < 64 * 1024) stderr += chunk
+    })
+    child.on("error", e => {
+      clearTimeout(timer)
+      reject(e)
+    })
+    child.on("close", code => {
+      clearTimeout(timer)
+      if (stopped) return resolve({ stopped: !timedOut, timedOut })
+      if (code !== 0 && !opts.okExitCodes?.includes(code ?? -1)) {
+        return reject(Object.assign(new Error(stderr.trim() || `git exited with ${code}`), { code, stderr }))
+      }
+      if (rest) onLine(rest)
+      resolve({ stopped: false, timedOut: false })
+    })
+  })
 }
 
 export const REMOTE_TIMEOUT = 60_000

@@ -6,7 +6,7 @@ Built with [Next.js](https://nextjs.org) 16 (App Router), React 19, TypeScript, 
 
 ## Features
 
-- **Projects and worktrees**: switch between repositories listed in `projects.json` and their linked worktrees, or create and remove worktrees.
+- **Projects and worktrees**: add, edit and remove the repositories Hunk may open (stored in `projects.json`, no rebuild needed), switch between them and their linked worktrees, or create and remove worktrees.
 - **Changes**: staged, unstaged, untracked and conflicted files in trees with multi-select. Stage, unstage and discard them, or commit, amend and push.
 - **Diffs and files**: split, unified or raw diffs; syntax-highlighted source; rendered Markdown; in-file find; blame; editing and saving files.
 - **File manager**: create, rename, move (drag and drop) and delete files and folders from the sidebar.
@@ -62,13 +62,13 @@ Every page and API route needs a login. Set these in `.env.local`:
 
 | File | Purpose |
 |------|---------|
-| `projects.json` | The projects you can open: `{ "projects": [{ "name", "dir", "ignore"? }] }`. Only these directories, and worktrees of them, are allowed. It is bundled at build time, so rebuild after editing. |
+| `projects.json` | The projects you can open: `{ "projects": [{ "name", "dir", "ignore"? }] }`. Only these directories, and worktrees of them, are allowed. Edited from the project switcher in the header (add / edit / remove) and read at runtime, so changes apply without a rebuild. Under Docker it lives in the container and is reset when the container is recreated — mount a volume and set `HUNK_PROJECTS_PATH` to keep changes. |
 | `settings.json` | Global settings, edited from **Settings…** in the account menu (or `Ctrl/Cmd+,`). See below. |
 | `ignore.config.json` | Global ignore patterns for the file browser (per-project `ignore` entries add to them). Superseded by the Settings dialog's ignore list once you save one there. |
 | `acp.config.json` | Agents offered in the chat: `{ "agents": [{ "id", "name", "command": [...] }] }`. |
 | `plugins.json` | Plugins: see below. |
 
-Useful environment variables: `HUNK_ALLOW_ANY_REPO=1` (lift the project allowlist), `HUNK_ACP_CONFIG` / `HUNK_PLUGINS_CONFIG` (other config paths), `HUNK_SHELL_DISABLED=1` (turn off `!command` in the chat), `HUNK_SHELL_MAX_LINES` / `HUNK_SHELL_TIMEOUT` (override the Settings values) and `HUNK_SETTINGS_PATH` (where `settings.json` lives).
+Useful environment variables: `HUNK_ALLOW_ANY_REPO=1` (lift the project allowlist), `HUNK_ACP_CONFIG` / `HUNK_PLUGINS_CONFIG` (other config paths), `HUNK_SHELL_DISABLED=1` (turn off `!command` in the chat), `HUNK_SHELL_MAX_LINES` / `HUNK_SHELL_TIMEOUT` (override the Settings values), `HUNK_SETTINGS_PATH` (where `settings.json` lives) and `HUNK_PROJECTS_PATH` (where `projects.json` lives).
 
 ### Settings
 
@@ -84,7 +84,7 @@ The Settings dialog stores its values on the server, in `settings.json` (next to
 | Files | **Ignore patterns** for All Files and Quick Open. Empty = `ignore.config.json`, else the built-in list. | — |
 | Appearance | **Theme**: light, dark or system. Each browser keeps a copy, so the page loads without a flash. | system |
 
-Agent and plugin commands, the project list, `HUNK_ALLOW_ANY_REPO` and `HUNK_SHELL_DISABLED` can't be changed from the browser. Turning on auto mode for new sessions lets the agent run tools without asking, so it gets the same warning as the per-session toggle.
+Agent and plugin commands, `HUNK_ALLOW_ANY_REPO` and `HUNK_SHELL_DISABLED` can't be changed from the browser. The project list **is** editable from the header's project switcher — anyone who can log in can add a directory to the allowlist (it must exist and be a git repo), so Hunk is only as safe as its login. Turning on auto mode for new sessions lets the agent run tools without asking, so it gets the same warning as the per-session toggle.
 
 Under Docker, `settings.json` lives inside the container. To keep it across rebuilds, mount a directory and point `HUNK_SETTINGS_PATH` into it.
 
