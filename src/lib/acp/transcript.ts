@@ -341,6 +341,53 @@ export function touchesFiles(kind: ToolKind | null | undefined): boolean {
   return kind === "edit" || kind === "delete" || kind === "move"
 }
 
+export interface AgentEdit {
+  path: string
+  change: "added" | "edited" | "deleted" | "moved"
+  // Folded across repeats: the first old text → the last new text.
+  oldText: string | null
+  newText: string
+}
+
+// Files the agent changed in this session, in the order it touched them.
+// Paths come from the tool calls' diff content and locations; a diff with no
+// old text is a new file.
+export function agentEdits(items: ChatItem[], repo: string): AgentEdit[] {
+  const at = new Map<string, number>()
+  const edits: AgentEdit[] = []
+  for (const item of items) {
+    if (item.kind !== "tool" || !touchesFiles(item.toolKind)) continue
+    const paths: string[] = []
+    let added = false
+    const diffs: Extract<ToolCallContent, { type: "diff" }>[] = []
+    for (const c of item.content) {
+      if (c.type !== "diff") continue
+      diffs.push(c)
+      if (c.oldText == null) added = true
+    }
+    for (const c of diffs) {
+      const rel = repoRelative(repo, c.path)
+      if (rel) paths.push(rel)
+    }
+    for (const loc of item.locations) {
+      const rel = repoRelative(repo, loc.path)
+      if (rel) paths.push(rel)
+    }
+    const change: AgentEdit["change"] = item.toolKind === "delete" ? "deleted" : item.toolKind === "move" ? "moved" : added ? "added" : "edited"
+    for (const rel of paths) {
+      const diff = diffs.find(c => repoRelative(repo, c.path) === rel)
+      const i = at.get(rel)
+      if (i === undefined) {
+        at.set(rel, edits.length)
+        edits.push({ path: rel, change, oldText: diff?.oldText ?? null, newText: diff?.newText ?? "" })
+      } else if (diff) {
+        edits[i] = { ...edits[i], newText: diff.newText }
+      }
+    }
+  }
+  return edits
+}
+
 // An agent path (absolute, or relative to the repo) as a repo-relative
 // path, or null when it's outside the repo.
 export function repoRelative(repo: string, filePath: string): string | null {

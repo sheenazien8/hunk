@@ -1,10 +1,12 @@
-import { useLayoutEffect, useRef, useState } from "react"
-import { ArrowDown, Bot, Loader2, Plus, RefreshCw, Trash2, X, Zap } from "lucide-react"
+import { useLayoutEffect, useMemo, useRef, useState } from "react"
+import { ArrowDown, Bot, FileEdit, Loader2, Plus, RefreshCw, Trash2, X, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog, useConfirm } from "@/components/ui/confirm-dialog"
 import { AUTO_MODE_WARNING } from "@/features/settings/settings-dialog"
+import { agentEdits } from "@/lib/acp/transcript"
 import { cn } from "@/lib/utils"
 import { ChatItemView } from "./chat-items"
+import { EditedFilesDialog } from "./edited-files-dialog"
 import { PromptBox } from "./prompt-box"
 import { SessionPicker } from "./session-picker"
 import type { Agent } from "./use-agent"
@@ -93,6 +95,8 @@ export function AgentPanel({ agent, repo, files, changedFiles, activeFile, onOpe
 }) {
   const { state } = agent.transcript
   const confirm = useConfirm()
+  const [showEdits, setShowEdits] = useState(false)
+  const edits = useMemo(() => agentEdits(agent.transcript.items, repo), [agent.transcript.items, repo])
 
   const toggleAuto = async () => {
     if (!state.autoApprove && !(await confirm.ask({
@@ -152,6 +156,18 @@ export function AgentPanel({ agent, repo, files, changedFiles, activeFile, onOpe
           New
         </Button>
         <Button
+          size="sm"
+          variant="outline"
+          className="h-8 gap-1 px-2 text-xs"
+          title="Files the agent changed in this session"
+          disabled={!agent.sessionId}
+          onClick={() => setShowEdits(true)}
+        >
+          <FileEdit size={14} />
+          Files
+          {edits.length > 0 && <span className="rounded bg-muted px-1 text-[10px]">{edits.length}</span>}
+        </Button>
+        <Button
           variant={state.autoApprove ? "default" : "outline"}
           size="icon"
           className="h-8 w-8"
@@ -187,6 +203,13 @@ export function AgentPanel({ agent, repo, files, changedFiles, activeFile, onOpe
 
       <Messages agent={agent} repo={repo} onOpenFile={onOpenFile} />
       <PromptBox agent={agent} files={files} changedFiles={changedFiles} activeFile={activeFile} />
+      <EditedFilesDialog
+        open={showEdits}
+        onOpenChange={setShowEdits}
+        repo={repo}
+        edits={edits}
+        onOpenFile={onOpenFile}
+      />
       <ConfirmDialog open={confirm.open} request={confirm.request} onConfirm={confirm.confirm} onOpenChange={confirm.onOpenChange} />
     </div>
   )

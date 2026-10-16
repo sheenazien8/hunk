@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { autoApproveOption } from "./permissions"
-import { applyEvents, emptyTranscript, repoRelative, summarizeAnswer, type ChatItem } from "./transcript"
+import { agentEdits, applyEvents, emptyTranscript, repoRelative, summarizeAnswer, type ChatItem } from "./transcript"
 import type { AcpEvent, SeqEvent } from "./types"
 
 const seq = (events: AcpEvent[], from = 1): SeqEvent[] => events.map((event, i) => ({ seq: from + i, event }))
@@ -189,6 +189,30 @@ describe("repoRelative", () => {
   it("accepts paths relative to the repo", () => {
     expect(repoRelative("/r/repo", "smoke.txt")).toBe("smoke.txt")
     expect(repoRelative("/r/repo", "./src/a.ts")).toBe("src/a.ts")
+  })
+})
+
+describe("agentEdits", () => {
+  const tool = (kind: string, parts: Partial<{ content: unknown[]; locations: unknown[] }>): AcpEvent =>
+    ({ type: "update", update: { sessionUpdate: "tool_call", toolCallId: String(Math.random()), kind, title: "t", status: "completed", ...parts } }) as AcpEvent
+
+  it("collects edited files once, in order, marked added when there is no old text", () => {
+    const edits = agentEdits(run([
+      tool("edit", { content: [{ type: "diff", path: "/r/repo/a.ts", oldText: "x\n", newText: "y\n" }] }),
+      tool("edit", { content: [{ type: "diff", path: "/r/repo/new.txt", oldText: null, newText: "hi\n" }] }),
+      tool("edit", { content: [{ type: "diff", path: "/r/repo/a.ts", oldText: "y\n", newText: "z\n" }], locations: [{ path: "/r/repo/a.ts" }] }),
+      tool("read", { locations: [{ path: "/r/repo/a.ts" }] }),
+      tool("delete", { locations: [{ path: "/r/repo/gone.ts" }, { path: "/r/outside.ts" }] }),
+    ]), "/r/repo")
+    expect(edits).toEqual([
+      { path: "a.ts", change: "edited", oldText: "x\n", newText: "z\n" },
+      { path: "new.txt", change: "added", oldText: null, newText: "hi\n" },
+      { path: "gone.ts", change: "deleted", oldText: null, newText: "" },
+    ])
+  })
+
+  it("is empty without file-touching tools", () => {
+    expect(agentEdits(run([chunk("agent_message_chunk", "hi")]), "/r/repo")).toEqual([])
   })
 })
 

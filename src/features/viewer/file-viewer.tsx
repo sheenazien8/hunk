@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react"
 import { GitCommit, RefreshCw } from "lucide-react"
 import type { BufferEntry } from "@/features/buffer/buffer"
 import { isBinaryFile, isImageFile, isMarkdownFile } from "@/features/files/file-types"
@@ -50,6 +51,33 @@ export function FileViewer({ entry, repoPath, fullPath, conflicted, onEditChange
     ? { findQuery: entry.findQuery, findCaseSensitive: entry.findCaseSensitive, findMatchIndex: entry.findMatchIndex }
     : { findCaseSensitive: entry?.findCaseSensitive }
 
+  // Per-tab scroll offset. One shared container serves every diff/raw tab, so
+  // the position is saved on scroll and restored when the tab is activated
+  // again. Kept in a ref: a scroll-per-frame React state update would
+  // re-render the whole buffer.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const offsetsRef = useRef<Map<string, { top: number; left: number }>>(new Map())
+  // gotoLine objects already acted on, so a jump suppresses restore once but
+  // the tab still restores its position on later switches.
+  const jumpedRef = useRef<Map<string, unknown>>(new Map())
+  const entryId = entry?.id
+  const gotoLine = entry?.gotoLine
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el || !entryId || !!entry?.findOpen) return
+    if (gotoLine && jumpedRef.current.get(entryId) !== gotoLine) {
+      jumpedRef.current.set(entryId, gotoLine)
+      offsetsRef.current.delete(entryId)
+      return
+    }
+    const saved = offsetsRef.current.get(entryId)
+    el.scrollTop = saved?.top ?? 0
+    el.scrollLeft = saved?.left ?? 0
+    // Also re-run when content arrives (view-mode switch, activation refetch):
+    // the body may have collapsed to a spinner and clamped scrollTop to 0.
+  }, [entryId, gotoLine, entry?.findOpen, entry?.editMode, entry?.diff, entry?.raw, entry?.diffLoading, entry?.blame, entry?.md])
+
   if (entry?.editMode) {
     return (
       <EditView
@@ -88,7 +116,7 @@ export function FileViewer({ entry, repoPath, fullPath, conflicted, onEditChange
     body = <ImageView key={entry.id} repoPath={repoPath} file={entry.file} />
   } else if (isBinaryFile(entry.file)) {
     body = <BinaryPlaceholder file={entry.file} />
-  } else if (entry.diffLoading && !entry.fromAll && !(conflicted && entry.raw)) {
+  } else if (entry.diffLoading && !entry.diff && !entry.raw && !entry.blame && !entry.md) {
     body = <Spinner />
   } else if (conflicted) {
     body = (
@@ -123,5 +151,20 @@ export function FileViewer({ entry, repoPath, fullPath, conflicted, onEditChange
     body = <Placeholder text="No changes for this file" />
   }
 
-  return <div className="diff-scroll h-full overflow-auto">{body}</div>
+  return (
+    <div
+      ref={scrollRef}
+      className="diff-scroll h-full overflow-auto"
+      onScroll={() => {
+        const el = scrollRef.current
+        // A collapsed body (spinner/placeholder, nothing scrollable) clamps
+        // scrollTop to 0; ignore those so they can't overwrite the offset.
+        if (el && entryId && el.scrollHeight > el.clientHeight) {
+          offsetsRef.current.set(entryId, { top: el.scrollTop, left: el.scrollLeft })
+        }
+      }}
+    >
+      {body}
+    </div>
+  )
 }
