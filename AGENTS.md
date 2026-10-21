@@ -31,6 +31,7 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   │   ├── auth/{login,logout,me}/route.ts
 │   │   ├── git/{status,diff,content,all-files,action,worktrees}/route.ts
 │   │   ├── git/{blame,log,commit,branches,stash}/route.ts   (diff also takes ?commit=<sha>)
+│   │   ├── git/search/route.ts # GET content search (Search in files)
 │   │   ├── acp/{agents,sessions,action}/route.ts, acp/events/route.ts (SSE stream)
 │   │   ├── plugins/route.ts    # GET plugin list (id + name) for the header menu
 │   │   └── settings/route.ts   # GET / PATCH (deep merge) global settings
@@ -56,6 +57,7 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── git/stash.ts            # listStashes, stash/stashPop/stashApply/stashDrop actions
 │   ├── git/remote.ts           # fetch / pull (ff-only | rebase, autostash) / push (--force-with-lease)
 │   ├── git/commit-tools.ts     # amend, undoCommit, revert, cherryPick, continue/abortOperation
+│   ├── git/search.ts           # searchRepo(): streamed `git grep` (gitLines), include/exclude globs
 │   ├── fs/files.ts             # read/write/create (file|dir)/rename/remove repo paths (path- and .git-guarded)
 │   ├── fs/walk.ts              # All Files walker + ignore-pattern matching
 │   ├── acp/                    # agent chat: config.ts (acp.config.json), agent-process.ts (spawn +
@@ -71,6 +73,7 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── git/parse-diff.ts       # unified diff → hunks
 │   ├── git/parse-worktrees.ts  # `git worktree list --porcelain -z` parser
 │   ├── git/parse-{blame,log,branches,stash}.ts  # parsers (+ the git --format strings they expect)
+│   ├── git/search-ranges.ts    # JS pattern + match ranges / preview cut for search results
 │   ├── git/parse-conflict.ts   # conflict-marker parser + resolveConflict(content, i, ours|theirs|both)
 │   ├── acp/                    # agent chat contract (types.ts), transcript.ts (event log → chat items),
 │                               #   line-diff.ts (ACP diff → unified diff), permissions.ts, mentions.ts (@file parsing/ranking),
@@ -96,6 +99,8 @@ Layered: `app/` is routing only → `server/` (server-only git/fs logic) and `fe
 │   ├── viewer/                 # viewer-panel.tsx (toolbar), file-viewer.tsx (view switch),
 │   │                           #   diff/code/markdown/edit views, numbered-code.tsx, highlight-code.ts
 │   ├── find/                   # find.ts (pure engine), use-find.ts, find-bar.tsx, highlight-segments.tsx
+│   ├── search/                 # Ctrl/Cmd+Shift+F Search in files: use-search.ts (form + debounced fetch),
+│   │                           #   search-dialog.tsx (Radix dialog, results grouped by file)
 │   ├── quick-open/             # Ctrl/Cmd+P go-to-file palette: fuzzy.ts (pure ranker + path:line parse),
 │   │                           #   use-quick-open.ts, quick-open.tsx (Radix dialog)
 │   ├── files/                  # file-types.ts (binary/markdown/lang), status-display.tsx
@@ -197,6 +202,7 @@ Vitest (`vitest.config.mts`, node env). Unit tests sit next to the code (`*.test
     *   Bulk Stage/Discard expand selected folders to the changed files under them.
     *   **Server**: action `move` (`files` + `to` folder) skips items already there and validates everything before moving anything. The client mirrors it with `validateMoveTarget` / `moveTargets`, and the latter drives the tab remap. Drag-and-drop always uses `move`; F2 rename uses `rename`.
 *   **Quick Open** (`features/quick-open/`, plan `docs/plan/25-quick-open-file-picker.md`): Ctrl/Cmd+P (also the header search button) fuzzy-finds over `repoFiles` (All Files minus git-ignored) ∪ changed files; empty query = open tabs then changed files. It's separate from the sidebar search input, which stays a tree/History filter. While it's open the global shortcut handler ignores keys. `path:42` opens the file raw (All Files tab) with `BufferEntry.gotoLine`, which `NumberedCode` scrolls to/highlights (CodeView only).
+*   **Search in files** (`features/search/`): Ctrl/Cmd+Shift+F (also the header button; a one-line text selection becomes the query) opens a Quick Open-style dialog. The server runs `git grep -n -I --null --untracked` (tracked + untracked, never git-ignored or binary files), `-F` literal or `-P` regex (falls back to `-E` when git lacks PCRE), `-i` unless Match case, `-w` for whole word. Results also drop paths matching the All Files ignore patterns. Include/exclude globs are comma-separated: a bare name matches at any depth, a path from the root, and both match folder contents (`globPathspecs` → `:(glob)` / `:(exclude,glob)`). Output is streamed via `gitLines()` (`server/git/exec.ts`) and git is killed at 2000 matching lines or 20s (`truncated`). Highlights come from the same pattern compiled in JS (`lib/git/search-ranges.ts`); long lines are cut to a preview around the first match. The form and last results live in `useSearch`, so reopening shows them (and re-runs the search). Enter or a click opens the file raw at that line via `openFromQuickOpen`.
 *   **Global settings** (kanban CARD-40): `settings.json` (`HUNK_SETTINGS_PATH` overrides; gitignored/dockerignored, `settings.example.json`) is read on every call like `acp.config.json`, so changes apply at once. Writes go to a tmp file + rename, queued so concurrent PATCHes don't lose each other, and through a symlink (`deploy-host.sh` creates `settings.json` and links it into `.next/standalone`). `GET`/`PATCH /api/settings` return `{ settings, env, ignoreDefaults }`. The schema lives in `lib/settings/types.ts`: invalid values fall back per value and unknown keys are dropped. Leave room for per-project overrides later (`projects.<dir>`). The UI opens from the account menu ("Settings…") or `Ctrl/Cmd+,`.
     *   **Where each setting applies**: `agent.autoApproveDefault` is set in `registry.openSession` before the first `pushState()` (new + loaded/resumed; a live session keeps its own state; elicitations are never auto-answered). `agent.defaultAgent` sorts first in `GET /api/acp/agents`, and the client takes `list[0]` when localStorage has no `hunk-agent`. Shell limits are env > settings > default, read per run. `viewer.*` feeds `newEntry()` through `useBuffer`'s `defaults`; tabs restored before the settings arrive start split. `git.confirmPush` asks in `push()` in `hunk-app.tsx`. `files.ignore` (null/empty = `ignore.config.json`, else built-in) is used by `loadIgnorePatterns`; the walker has no cache, and a save reloads status/All Files.
     *   **Theme**: the server value is mirrored into `localStorage` `hunk-dark` (`applyTheme`; `system` removes the key), so the pre-hydration script still works. The account-menu toggle PATCHes the theme.

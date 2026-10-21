@@ -10,6 +10,8 @@ import { IMAGE_ACCEPT, imageFiles, prepareImage } from "./image-attach"
 import type { Agent } from "./use-agent"
 
 const PROMPT_HEIGHT_KEY = "hunk-agent-prompt-height"
+const SHELL_HISTORY_KEY = "hunk-agent-shell-history"
+const SHELL_HISTORY_MAX = 100
 const PROMPT_ROWS = 5
 const PROMPT_MIN_HEIGHT = 56
 // Never let the prompt box take more than this share of the viewport.
@@ -103,6 +105,14 @@ interface Attachment extends ChatImage {
   name: string
 }
 
+function historyKey(repo: string) {
+  try {
+    return `${SHELL_HISTORY_KEY}-${btoa(repo)}`
+  } catch {
+    return SHELL_HISTORY_KEY
+  }
+}
+
 let nextAttachmentId = 1
 
 // Images attached to the next prompt (paste, drop or the file picker),
@@ -151,8 +161,9 @@ function useAttachments() {
 // quick buttons to mention the open file or all changed files, chips for
 // what will be attached, a drag handle for its height, and below it the
 // agent's settings (model, thinking, mode…) with context usage.
-export function PromptBox({ agent, files, changedFiles, activeFile }: {
+export function PromptBox({ agent, repo, files, changedFiles, activeFile }: {
   agent: Agent
+  repo: string
   // Mentionable repo files (git-ignored ones left out), for suggestions
   files: string[]
   // Files with uncommitted changes
@@ -169,6 +180,23 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
   const { busy, connected } = agent.transcript.state
   const disabled = !agent.sessionId || agent.streamStatus === "closed" || !connected
   const { height, isResizing, startResize, reset, boxRef } = usePromptHeight()
+  // Past `!cmd` commands for this repo; ↑ / ↓ recall them (filtered by the
+  // text already typed).
+  const [history, setHistory] = useState<string[]>([])
+  const [recall, setRecall] = useState<{ prefix: string; pos: number; draft: string } | null>(null)
+
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- restoring the repo's command history (client-only) */
+    try {
+      const raw = localStorage.getItem(historyKey(repo))
+      const parsed = raw ? JSON.parse(raw) : []
+      setHistory(Array.isArray(parsed) ? parsed.filter((c): c is string => typeof c === "string") : [])
+    } catch {
+      setHistory([])
+    }
+    setRecall(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [repo])
   const attachments = useAttachments()
   const pickerRef = useRef<HTMLInputElement>(null)
   const canAttach = !disabled && agent.transcript.state.images && !attachments.busy
@@ -237,7 +265,18 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
       setText("")
       setCaret(0)
       setDismissedAt(null)
+      setRecall(null)
       if (input.kind !== "shell") attachments.clear()
+      else {
+        const command = (input.share ? "!" : "!!") + input.command
+        setHistory(prev => {
+          const next = [...prev.filter(c => c !== command), command].slice(-SHELL_HISTORY_MAX)
+          try {
+            localStorage.setItem(historyKey(repo), JSON.stringify(next))
+          } catch {}
+          return next
+        })
+      }
     }
   }
 
@@ -261,6 +300,26 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
       e.stopPropagation()
       setDismissedAt(mention.start)
       return
+    }
+    // ↑ / ↓ recall past `!cmd` runs (filtered by what is already typed); from
+    // an empty box or an already recalled one.
+    if (!showSuggestions && history.length > 0 && (recall || text === "" || text.trimStart().startsWith("!")) && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      const prefix = recall ? recall.prefix : text.trimEnd()
+      const matches = history.filter(c => c.startsWith(prefix))
+      if (matches.length > 0) {
+        const next = (recall ? recall.pos : matches.length) + (e.key === "ArrowUp" ? -1 : 1)
+        e.preventDefault()
+        if (next >= matches.length) {
+          const draft = recall?.draft ?? ""
+          update(draft, draft.length)
+          setRecall(null)
+        } else {
+          const pos = Math.max(0, next)
+          setRecall({ prefix, pos, draft: recall?.draft ?? text })
+          update(matches[pos], matches[pos].length)
+        }
+        return
+      }
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
@@ -371,6 +430,7 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
           <span className="font-medium text-foreground">Shell</span>
           <span>
             {input.share ? "· runs in the repo, output goes to the agent with your next message (!! to keep it private)" : "· runs in the repo, output stays private"}
+            {history.length > 0 && " · ↑ for past commands"}
             {shellRunning && " · a command is still running"}
           </span>
         </div>
@@ -426,6 +486,7 @@ export function PromptBox({ agent, files, changedFiles, activeFile }: {
             onChange={e => {
               setText(e.target.value)
               setCaret(e.target.selectionStart)
+              setRecall(null)
             }}
             onSelect={trackCaret}
             onClick={trackCaret}

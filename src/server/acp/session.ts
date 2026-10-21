@@ -60,6 +60,9 @@ export class AgentSession {
   updatedAt = new Date()
   config: SessionConfig = { configOptions: [], modes: null, usage: null }
   shell: RunningShell | null = null
+  // Variables exported by the user's `!export NAME=...` commands, carried
+  // into every later command in this session.
+  shellVars: Record<string, string> = {}
   // Shared (`!`) command results not yet sent to the agent; the next
   // prompt carries them.
   sharedShell: ShellResult[] = []

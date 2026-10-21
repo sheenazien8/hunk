@@ -67,9 +67,10 @@ function shellPath(): string {
   return existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh"
 }
 
-function shellEnv(): NodeJS.ProcessEnv {
+function shellEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     ...agentEnv(undefined),
+    ...extra,
     PAGER: "cat",
     GIT_PAGER: "cat",
     GIT_TERMINAL_PROMPT: "0",
@@ -77,6 +78,33 @@ function shellEnv(): NodeJS.ProcessEnv {
     NO_COLOR: "1",
     FORCE_COLOR: "0",
   }
+}
+
+// `export NAME=value` / `unset NAME` segments of a command, so the variables
+// a user exports survive into the next `!` command of the session. Only
+// explicit `export` counts (not `NAME=x cmd` prefixes) and only simple
+// literals: no `$(...)` or `$OTHER` expansion is evaluated here.
+const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const ASSIGN = /([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|'([^']*)'|([^\s;&|]*))/g
+
+export function parseShellVars(command: string): { set: Record<string, string>; unset: string[] } {
+  const set: Record<string, string> = {}
+  const unset: string[] = []
+  for (const raw of command.split(/&&|\|\||;|\n/)) {
+    const segment = raw.trim()
+    if (segment.startsWith("export") && /^export(\s|$)/.test(segment)) {
+      for (const m of segment.slice(6).matchAll(ASSIGN)) {
+        const value = m[2] ?? m[3] ?? m[4] ?? ""
+        // Anything that needs the shell to expand (`$X`, `$(cmd)`) is left
+        // to the run itself; only plain literals are remembered.
+        if (!value.includes("$") && !value.includes("`")) set[m[1]] = value
+      }
+      for (const word of segment.slice(6).split(/\s+/)) if (NAME.test(word)) delete set[word]
+    } else if (segment.startsWith("unset") && /^unset(\s|$)/.test(segment)) {
+      for (const word of segment.slice(5).split(/\s+/)) if (NAME.test(word)) unset.push(word)
+    }
+  }
+  return { set, unset }
 }
 
 export async function runShell(session: AgentSession, command: string, share: boolean) {
@@ -99,11 +127,14 @@ export async function runShell(session: AgentSession, command: string, share: bo
   let exitTimer: NodeJS.Timeout | undefined
 
   session.push({ type: "shell_start", shellId, command: cmd, share })
+  const { set, unset } = parseShellVars(cmd)
+  for (const name of unset) delete session.shellVars[name]
+  Object.assign(session.shellVars, set)
   // detached: its own process group, so a stop kills pipelines and
   // grandchildren too.
   const child = spawn(shellPath(), ["-c", cmd], {
     cwd: session.repo,
-    env: shellEnv(),
+    env: shellEnv(session.shellVars),
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   })

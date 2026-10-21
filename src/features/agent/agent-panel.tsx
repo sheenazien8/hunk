@@ -202,7 +202,7 @@ export function AgentPanel({ agent, repo, files, changedFiles, activeFile, onOpe
       )}
 
       <Messages agent={agent} repo={repo} onOpenFile={onOpenFile} />
-      <PromptBox agent={agent} files={files} changedFiles={changedFiles} activeFile={activeFile} />
+      <PromptBox agent={agent} repo={repo} files={files} changedFiles={changedFiles} activeFile={activeFile} />
       <EditedFilesDialog
         open={showEdits}
         onOpenChange={setShowEdits}
